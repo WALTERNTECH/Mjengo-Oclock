@@ -1,0 +1,16 @@
+{
+  "name": "mjengo-oclock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mjengo O'clock — vetted plumbers, electricians, site managers and general workers on demand in Nairobi",
+  "workspaces": ["backend", "frontend"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "npm run build -w frontend && npm run build -w backend",
+    "start": "npm start -w backend",
+    "test": "npm test -w backend",
+    "typecheck": "npm run typecheck -w backend && npm run typecheck -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend"
+  }
+}

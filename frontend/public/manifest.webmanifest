@@ -1,0 +1,22 @@
+{
+  "name": "Mjengo O'clock",
+  "short_name": "Mjengo",
+  "description": "Vetted plumbers, electricians, site managers and general workers on demand in Nairobi.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "en-KE",
+  "categories": ["business", "lifestyle", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "My jobs", "url": "/jobs", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Work", "url": "/work", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

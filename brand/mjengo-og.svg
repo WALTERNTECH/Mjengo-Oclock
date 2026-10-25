@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+<rect width="1200" height="630" fill="#FFFFFF"/>
+<rect y="618" width="1200" height="12" fill="#0B7A3B"/>
+<svg x="120" y="215" width="160" height="160" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0B0F0C"/>
+  <circle cx="32" cy="33" r="19.5" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+  <path d="M32 16.5v3.5M49.5 33H46M32 49.5V46M14.5 33H18" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M25 26.2 32 33 43.2 21.4" fill="none" stroke="#1DB954" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="33" r="2.6" fill="#1DB954"/>
+</svg>
+<text x="320" y="318" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="92" fill="#0B0F0C" letter-spacing="-2">Mjengo <tspan fill="#0B7A3B">O'clock</tspan></text>
+<text x="324" y="380" font-family="Arial, Helvetica, sans-serif" font-size="32" fill="#4A524D">Vetted trades on demand in Nairobi</text>
+</svg>

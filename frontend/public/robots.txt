@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /jobs
+Disallow: /work
+Disallow: /account
+Disallow: /invoice
