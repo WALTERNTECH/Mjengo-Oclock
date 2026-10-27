@@ -9,7 +9,7 @@ import { ReportProblem } from "../components/ReportProblem";
 import { Avatar, Badge, Button, Input, Notice, Segmented, Select, Sheet, Skeleton, StarInput, Stars, StatusBadge, Textarea } from "../components/ui";
 import { onLive, useAuth, useConfig } from "../context/AuthContext";
 import { useToast } from "../context/toast";
-import { ACTIVE, ago, dateTime, kes, mmss, time, when } from "../lib/format";
+import { ACTIVE, ago, dateTime, kes, mmss, time, unitWord, when } from "../lib/format";
 import type { CancelQuote, ClientJob, Extra, Started } from "../types";
 
 // Views 3 and 4: the live job. A map on the top half; below it the worker, the status
@@ -173,7 +173,7 @@ export default function JobPage() {
             <div className="worker-card">
               <Avatar src={job.worker.photo} name={job.worker.name} size="lg" />
               <div className="grow stack g-4">
-                <span className="strong" style={{ fontSize: 17 }}>
+                <span className="strong" style={{ fontSize: 16 }}>
                   {job.worker.name}
                 </span>
                 <span className="row g-8 wrap small">
@@ -209,7 +209,13 @@ export default function JobPage() {
               <Badge tone="amber">Needs your answer</Badge>
             </div>
             <div>
-              {job.worker?.shortName} asks for {pendingExtra.kind === "hours" ? `${pendingExtra.hours} more hour${pendingExtra.hours === 1 ? "" : "s"}` : "materials"}: <b>{kes(pendingExtra.total)}</b>
+              {job.worker?.shortName} asks for{" "}
+              {pendingExtra.kind === "hours"
+                ? `${pendingExtra.hours} more hour${pendingExtra.hours === 1 ? "" : "s"}`
+                : pendingExtra.kind === "units"
+                  ? `${pendingExtra.units} more ${unitWord(job.service.unit, pendingExtra.units ?? 2)}`
+                  : "materials"}
+              : <b>{kes(pendingExtra.total)}</b>
               <span className="small muted"> ({kes(pendingExtra.amount)} + {kes(pendingExtra.fee)} fee)</span>
             </div>
             <div className="small">"{pendingExtra.reason}"</div>
@@ -573,10 +579,15 @@ function JobDetails({ job }: { job: ClientJob }) {
           </div>
         )}
         <div className="stack">
-          <div className="kv">
-            <span>{job.service.pricing === "hourly" ? `${job.service.hours} h × ${kes(job.service.rate)}` : "Fixed price"}</span>
-            <span className="num">{kes(job.price.base)}</span>
-          </div>
+          {job.priceLines.map((l) => (
+            <div className="kv" key={l.label}>
+              <span>
+                {l.label}
+                {l.detail && <span className="tiny"> · {l.detail}</span>}
+              </span>
+              <span className="num">{kes(l.amount)}</span>
+            </div>
+          ))}
           <div className="kv">
             <span>Service fee ({job.price.clientFeePct}%)</span>
             <span className="num">{kes(job.price.clientFee)}</span>
@@ -607,7 +618,7 @@ function JobDetails({ job }: { job: ClientJob }) {
           ))}
         </div>
         <Link to="/legal/policies" className="link small">
-          Fees, cancellations and disputes
+          Rates, fees and cancellations
         </Link>
       </div>
     </details>

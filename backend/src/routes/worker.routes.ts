@@ -275,8 +275,9 @@ workerRouter.post("/jobs/:id/extras", requireApprovedWorker, upload.single("phot
   const j = await myJob(req.user!.id, String(req.params.id));
   const b = z
     .object({
-      kind: z.enum(["hours", "materials"]),
+      kind: z.enum(["hours", "materials", "units"]),
       hours: z.coerce.number().positive().max(12).optional(),
+      units: z.coerce.number().positive().max(100_000).optional(),
       amount: z.coerce.number().int().positive().optional(),
       reason: z.string().trim().min(5, "Explain what the extra is for").max(300),
     })

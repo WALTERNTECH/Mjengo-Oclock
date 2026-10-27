@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { db, many, one } from "../config/db.js";
 import { env } from "../config/env.js";
-import { quote } from "../services/pricing.js";
+import { quote, unitPhrase, type Pricing } from "../services/pricing.js";
 import { paymentDriver } from "../services/payments.js";
 import { getSettings } from "../services/settings.js";
 import { badRequest } from "../utils/http.js";
@@ -14,25 +14,54 @@ import { smsConfigured } from "../utils/sms.js";
 
 export const catalogRouter = Router();
 
+type SvcRow = {
+  id: string;
+  category_id: string;
+  name: string;
+  description: string;
+  pricing: Pricing;
+  rate_kes: number;
+  unit_label: string;
+  min_hours: number;
+  shift_hours: number;
+  overtime_rate_kes: number | null;
+  zone: "nairobi" | "outside";
+  active: boolean;
+  sort: number;
+};
+
+export const serviceView = (s: SvcRow) => ({
+  id: s.id,
+  name: s.name,
+  description: s.description,
+  pricing: s.pricing,
+  rate: s.rate_kes,
+  unit: s.unit_label,
+  unitPhrase: unitPhrase(s),
+  /** The least that can be booked: hours (hourly) or units (per_unit). */
+  minQty: s.min_hours,
+  shiftHours: s.shift_hours,
+  overtimeRate: s.overtime_rate_kes,
+  zone: s.zone,
+  active: s.active,
+  sort: s.sort,
+});
+
 export async function catalog(includeInactive = false) {
-  const cats = await many<{ id: string; name: string; trade: string; blurb: string; requires_certificate: boolean; sort: number; active: boolean }>(
+  const cats = await many<{ id: string; name: string; trade: string; blurb: string; section: string; requires_certificate: boolean; sort: number; active: boolean }>(
     db(),
     `select * from categories ${includeInactive ? "" : "where active"} order by sort`,
   );
-  const svcs = await many<{ id: string; category_id: string; name: string; description: string; pricing: string; rate_kes: number; min_hours: number; active: boolean; sort: number }>(
-    db(),
-    `select * from services ${includeInactive ? "" : "where active"} order by sort, name`,
-  );
+  const svcs = await many<SvcRow>(db(), `select * from services ${includeInactive ? "" : "where active"} order by active desc, sort, name`);
   return cats.map((c) => ({
     id: c.id,
     name: c.name,
     trade: c.trade,
     blurb: c.blurb,
+    section: c.section,
     requiresCertificate: c.requires_certificate,
     active: c.active,
-    services: svcs
-      .filter((s) => s.category_id === c.id)
-      .map((s) => ({ id: s.id, name: s.name, description: s.description, pricing: s.pricing, rate: s.rate_kes, minHours: s.min_hours, active: s.active })),
+    services: svcs.filter((s) => s.category_id === c.id).map(serviceView),
   }));
 }
 
@@ -70,19 +99,40 @@ catalogRouter.get("/config", async (_req, res) => {
 });
 
 catalogRouter.post("/quote", async (req, res) => {
-  const b = z.object({ serviceId: z.uuid(), hours: z.coerce.number().positive().max(24).optional() }).parse(req.body);
-  const svc = await one<{ pricing: "flat" | "hourly"; rate_kes: number; min_hours: number; active: boolean }>(db(), `select pricing, rate_kes, min_hours, active from services where id = $1`, [b.serviceId]);
+  const b = z
+    .object({
+      serviceId: z.uuid(),
+      hours: z.coerce.number().positive().max(24).optional(),
+      quantity: z.coerce.number().positive().max(100_000).optional(),
+      overtimeHours: z.coerce.number().min(0).max(16).optional(),
+    })
+    .parse(req.body);
+  const svc = await one<SvcRow>(db(), `select * from services where id = $1`, [b.serviceId]);
   if (!svc?.active) throw badRequest("That service isn't available");
   const s = await getSettings();
-  res.json({ quote: quote({ pricing: svc.pricing, rate: svc.rate_kes, hours: Math.max(svc.min_hours, b.hours ?? svc.min_hours), clientFeePct: s.client_fee_pct, workerFeePct: s.worker_fee_pct }) });
+  res.json({
+    quote: quote({
+      pricing: svc.pricing,
+      rate: svc.rate_kes,
+      hours: Math.max(svc.min_hours, b.hours ?? svc.min_hours),
+      quantity: Math.max(svc.min_hours, b.quantity ?? svc.min_hours),
+      shiftHours: svc.shift_hours,
+      overtimeHours: b.overtimeHours,
+      overtimeRate: svc.overtime_rate_kes,
+      clientFeePct: s.client_fee_pct,
+      workerFeePct: s.worker_fee_pct,
+    }),
+  });
 });
 
 const coord = (min: number, max: number) => z.coerce.number().min(min).max(max);
 
 catalogRouter.get("/geo/search", async (req, res) => {
-  const b = z.object({ q: z.string().trim().min(2).max(120), lat: coord(-90, 90).optional(), lng: coord(-180, 180).optional() }).parse(req.query);
+  const b = z
+    .object({ q: z.string().trim().min(2).max(120), lat: coord(-90, 90).optional(), lng: coord(-180, 180).optional(), scope: z.enum(["nairobi", "kenya"]).default("nairobi") })
+    .parse(req.query);
   try {
-    res.json({ places: await searchPlaces(b.q, b.lat != null && b.lng != null ? { lat: b.lat, lng: b.lng } : undefined) });
+    res.json({ places: await searchPlaces(b.q, b.lat != null && b.lng != null ? { lat: b.lat, lng: b.lng } : undefined, b.scope) });
   } catch (e) {
     console.warn("[geo] search failed", (e as Error).message);
     res.json({ places: [], unavailable: true });

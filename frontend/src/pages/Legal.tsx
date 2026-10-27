@@ -1,19 +1,20 @@
 import { Navigate, useParams } from "react-router-dom";
+import { useApi } from "../api/client";
 import { PageHead } from "../components/ui";
 import { useConfig } from "../context/AuthContext";
-import { kes } from "../lib/format";
-import type { Config } from "../types";
+import { kes, ratePhrase } from "../lib/format";
+import type { Category, Config } from "../types";
 
 // Terms, privacy notice, and the fee, cancellation, refund and dispute policy shown at
 // booking (PRD 11). The numbers come from the live settings, so they match what's charged.
 
-const UPDATED = "25 October 2026";
+const UPDATED = "27 October 2026";
 
 export default function Legal() {
   const { doc } = useParams();
   const cfg = useConfig();
   if (doc !== "terms" && doc !== "privacy" && doc !== "policies") return <Navigate to="/legal/terms" replace />;
-  const title = doc === "terms" ? "Terms of service" : doc === "privacy" ? "Privacy notice" : "Fees, cancellations and disputes";
+  const title = doc === "terms" ? "Terms of service" : doc === "privacy" ? "Privacy notice" : "Rates, fees and cancellations";
   return (
     <div className="stack g-16">
       <PageHead title={title} back />
@@ -37,7 +38,11 @@ function Terms({ cfg }: { cfg?: Config }) {
       <p>Workers are independent professionals, not employees of Mjengo O'clock. They decide whether to accept a job and are responsible for doing it with reasonable skill and care, for their own tools, and for their own income tax. Before a worker can receive jobs we check their national ID and a selfie, and for electricians and plumbers a trade certificate or reference letter. We review ratings and suspend workers who fall below our standard.</p>
       <h2>Prices and fees</h2>
       <ul>
-        <li>Each job shows its rate before you book: a fixed price, or an hourly rate times the hours you choose.</li>
+        <li>
+          Each job shows its rate before you book, from our rate schedule: a flat rate per task or visit, an hourly rate, a fixed rate per 8-hour shift (hours beyond the shift billed hourly where a rate applies), or a rate per foot. Site manager visits are priced by
+          zone, Nairobi area or out of station.
+        </li>
+        <li>Contractor overhead and specialised engineering review fees aren't included in the schedule and are agreed under a separate scope contract.</li>
         <li>We add a {c}% service fee to the job price, paid by the client, and deduct {w}% from the worker's share before payout. The same rates apply to every trade and job size, with no minimum fee.</li>
         <li>Example: on a KES 1,000 job the client pays KES {(1000 + Math.round(10 * c)).toLocaleString("en-KE")}, the worker receives KES {(1000 - Math.round(10 * w)).toLocaleString("en-KE")}, and Mjengo O'clock keeps KES {(Math.round(10 * c) + Math.round(10 * w)).toLocaleString("en-KE")} before its costs.</li>
         <li>Extra hours or materials are charged only if the client approves the request in the app. Anything not approved is not charged.</li>
@@ -99,6 +104,57 @@ function Privacy({ cfg }: { cfg?: Config }) {
   );
 }
 
+/** The construction and site labour rate schedule, as it stands in the catalogue. */
+function RateSchedule() {
+  const { data } = useApi<{ categories: Category[] }>("/catalog", { staleMs: 60_000 });
+  const rows = new Map<string, { trade: string; name: string; rate: string }[]>();
+  for (const c of data?.categories ?? [])
+    for (const s of c.services) {
+      const k = c.section || "Trades";
+      rows.set(k, [...(rows.get(k) ?? []), { trade: c.name, name: s.name, rate: ratePhrase(s) }]);
+    }
+  const overtime = data?.categories.flatMap((c) => c.services).find((s) => s.pricing === "shift" && s.overtimeRate);
+  return (
+    <>
+      <h2>Rate schedule</h2>
+      {[...rows.entries()].map(([section, list]) => (
+        <table className="policy-table" key={section}>
+          <thead>
+            <tr>
+              <th>{section}</th>
+              <th>Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((r) => (
+              <tr key={r.name}>
+                <td>{r.name}</td>
+                <td>{r.rate}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ))}
+      <h2>How rates are billed</h2>
+      <ul>
+        <li>
+          <b>Shift length.</b> Standard day shifts are capped at 8 hours. Hours worked beyond that are billed hourly where an hourly rate applies{overtime ? ` (${overtime.name.toLowerCase()}: ${kes(overtime.overtimeRate)} per hour)` : ""}.
+        </li>
+        <li>
+          <b>Zones.</b> Site management visits are a flat rate based on location: within the Nairobi area, or out of station.
+        </li>
+        <li>
+          <b>Task-based billing.</b> Plumbers, welders and general fundis are billed a flat rate per assigned task or engagement. Earthworks are billed per foot.
+        </li>
+        <li>
+          <b>Exclusions.</b> Contractor overhead and specialised engineering review fees aren't part of this standard schedule; they're handled under separate scope contracts.
+        </li>
+        <li>Materials, extra hours or extra quantity are charged only if you approve the worker's request in the app.</li>
+      </ul>
+    </>
+  );
+}
+
 function Policies({ cfg }: { cfg?: Config }) {
   const p = cfg?.policy;
   const rows: [string, string][] = [
@@ -118,6 +174,8 @@ function Policies({ cfg }: { cfg?: Config }) {
       <p>
         Prices are shown before you book. We add a {cfg?.fees.clientPct ?? 9}% service fee for clients and deduct {cfg?.fees.workerPct ?? 9}% from workers' payouts. Your M-Pesa payment is held until the job is approved, and refunds go back to the M-Pesa number that paid.
       </p>
+      <RateSchedule />
+      <h2>Cancellations, no-shows and disputes</h2>
       <table className="policy-table">
         <thead>
           <tr>

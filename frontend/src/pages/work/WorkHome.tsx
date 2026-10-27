@@ -254,7 +254,7 @@ function OnDuty({ profile, reload }: { profile: WorkerProfile; reload: () => voi
 
       <div className={`duty ${profile.available ? "on" : ""}`}>
         <div className="grow stack g-4">
-          <span className="strong" style={{ fontSize: 17 }}>
+          <span className="strong" style={{ fontSize: 16 }}>
             {profile.available ? "You're available" : "You're off duty"}
           </span>
           <span className="small muted">
@@ -285,10 +285,8 @@ function OnDuty({ profile, reload }: { profile: WorkerProfile; reload: () => voi
             <span className="muted small">your pay, after the {cfg?.fees.workerPct ?? 9}% platform fee</span>
           </div>
           <div className="stack g-6">
-            <span className="strong" style={{ fontSize: 17 }}>
-              {offer.service.name}
-              {offer.service.pricing === "hourly" ? ` · ${offer.service.hours} h` : ""}
-            </span>
+            <span className="strong">{offer.service.name}</span>
+            {offer.service.pricing !== "flat" && <span className="small">{offer.summary}</span>}
             <span className="row g-6 small">
               <MapPin size={15} /> {offer.area}
               {offer.scheduledFor && (

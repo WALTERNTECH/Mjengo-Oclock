@@ -74,5 +74,34 @@ export const WORKER_STATUS_LABEL: Record<JobStatus, string> = {
 export const ACTIVE: JobStatus[] = ["ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS"];
 export const OPEN: JobStatus[] = ["PENDING_PAYMENT", "SCHEDULED", "SEARCHING", "UNASSIGNED", ...ACTIVE, "COMPLETED", "DISPUTED"];
 
+export const unitWord = (unit: string, n: number) => (unit === "ft" ? (n === 1 ? "foot" : "feet") : `${unit || "unit"}${n === 1 ? "" : "s"}`);
+
+/** "KES 2,000 per task", "KES 100 per hour", "KES 800 per 8-hour shift", "KES 60 per foot". */
+export const ratePhrase = (s: { rate: number; unitPhrase: string }) => `${kes(s.rate)} ${s.unitPhrase}`;
+
+/** The same estimate the server charges (backend/src/services/pricing.ts). */
+export function estimate(
+  s: { pricing: "flat" | "hourly" | "shift" | "per_unit"; rate: number; unit: string; shiftHours: number; overtimeRate: number | null },
+  o: { hours: number; quantity: number; overtimeHours: number },
+  clientFeePct: number,
+) {
+  const overtimeHours = s.pricing === "shift" && s.overtimeRate ? o.overtimeHours : 0;
+  const overtimeKes = Math.round(overtimeHours * (s.overtimeRate ?? 0));
+  const base =
+    s.pricing === "hourly" ? Math.round(s.rate * o.hours) : s.pricing === "per_unit" ? Math.round(s.rate * o.quantity) : s.pricing === "shift" ? s.rate + overtimeKes : s.rate;
+  const fee = Math.round((base * clientFeePct) / 100);
+  const detail =
+    s.pricing === "hourly"
+      ? `${o.hours} h × ${kes(s.rate)}`
+      : s.pricing === "per_unit"
+        ? `${o.quantity} ${unitWord(s.unit, o.quantity)} × ${kes(s.rate)}`
+        : s.pricing === "shift"
+          ? overtimeHours
+            ? `${s.shiftHours}-hour shift ${kes(s.rate)} + ${overtimeHours} h overtime ${kes(overtimeKes)}`
+            : `${s.shiftHours}-hour shift`
+          : kes(s.rate);
+  return { base, fee, total: base + fee, overtimeHours, overtimeKes, detail };
+}
+
 /** A per-device key so a retried booking never creates two jobs. */
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

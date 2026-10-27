@@ -1,4 +1,4 @@
-import { ChevronLeft, CircleAlert, CircleCheck, HardHat, Info, Minus, Plus, Shovel, Star, TriangleAlert, Wrench, X, Zap } from "lucide-react";
+import { ChevronLeft, CircleAlert, CircleCheck, Flame, Hammer, HardHat, Info, Minus, Plus, Shovel, Star, TriangleAlert, Wrench, X, Zap } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -271,6 +271,6 @@ export function Skeleton({ h = 80 }: { h?: number }) {
 }
 
 export function CategoryIcon({ id, size = 24 }: { id: string; size?: number }) {
-  const I = id === "plumbing" ? Wrench : id === "electrical" ? Zap : id === "site_management" ? HardHat : Shovel;
+  const I = id === "plumbing" ? Wrench : id === "electrical" ? Zap : id === "site_management" ? HardHat : id === "welding" ? Flame : id === "fundi" ? Hammer : Shovel;
   return <I width={size} height={size} />;
 }

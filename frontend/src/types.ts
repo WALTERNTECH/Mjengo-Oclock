@@ -15,8 +15,28 @@ export type Me = {
 
 export type WorkerStatus = "draft" | "submitted" | "more_info" | "approved" | "rejected" | "suspended";
 
-export type Service = { id: string; name: string; description: string; pricing: "flat" | "hourly"; rate: number; minHours: number; active: boolean };
-export type Category = { id: string; name: string; trade: string; blurb: string; requiresCertificate: boolean; active: boolean; services: Service[] };
+export type Pricing = "flat" | "hourly" | "shift" | "per_unit";
+export type Zone = "nairobi" | "outside";
+
+export type Service = {
+  id: string;
+  name: string;
+  description: string;
+  pricing: Pricing;
+  rate: number;
+  /** "task", "visit", "shift", "hour" or "ft". */
+  unit: string;
+  /** "per task", "per 8-hour shift", "per foot"… */
+  unitPhrase: string;
+  /** Least that can be booked: hours (hourly) or units (per_unit). */
+  minQty: number;
+  shiftHours: number;
+  overtimeRate: number | null;
+  zone: Zone;
+  active: boolean;
+  sort: number;
+};
+export type Category = { id: string; name: string; trade: string; blurb: string; section: string; requiresCertificate: boolean; active: boolean; services: Service[] };
 
 export type Config = {
   fees: { clientPct: number; workerPct: number };
@@ -47,10 +67,11 @@ export type JobStatus =
   | "PENDING_PAYMENT" | "SCHEDULED" | "SEARCHING" | "UNASSIGNED" | "ACCEPTED" | "EN_ROUTE" | "ON_SITE" | "IN_PROGRESS" | "COMPLETED" | "DISPUTED" | "CLOSED" | "CANCELLED" | "EXPIRED";
 
 export type TimelineEvent = { kind: string; actor: string; at: string; detail: Record<string, unknown> };
-export type Extra = { id: string; kind: "hours" | "materials"; hours: number | null; amount: number; fee: number; total: number; reason: string; photo: string | null; status: string; at: string };
+export type Extra = { id: string; kind: "hours" | "materials" | "units"; hours: number | null; units: number | null; amount: number; fee: number; total: number; reason: string; photo: string | null; status: string; at: string };
+export type PriceLine = { label: string; detail?: string; amount: number };
 export type Invoice = {
   number: string;
-  lines: { label: string; detail?: string; amount: number }[];
+  lines: PriceLine[];
   subtotal: number;
   feePct: number;
   fee: number;
@@ -68,7 +89,23 @@ type JobCommon = {
   ref: string;
   status: JobStatus;
   outcome: string | null;
-  service: { id: string | null; name: string; category: string; pricing: "flat" | "hourly"; rate: number; hours: number };
+  service: {
+    id: string | null;
+    name: string;
+    category: string;
+    pricing: Pricing;
+    rate: number;
+    hours: number;
+    quantity: number;
+    unit: string;
+    unitPhrase: string;
+    shiftHours: number | null;
+    overtimeHours: number;
+    overtimeRate: number | null;
+    zone: Zone;
+  };
+  /** The booked work as billed: the rate, and overtime past a shift on its own line. */
+  priceLines: PriceLine[];
   description: string;
   scheduledFor: string | null;
   createdAt: string;
@@ -123,13 +160,16 @@ export type WorkerJob = JobCommon & {
   theirRating: { stars: number; review: string } | null;
   dispute: { reason: string; status: string; decision: string | null; note: string | null } | null;
   probation: boolean;
+  extraRates: { hourly: number | null; unit: number | null; unitLabel: string };
 };
 
 export type Offer = {
   offerId: string;
   jobId: string;
   ref: string;
-  service: { name: string; category: string; pricing: string; hours: number };
+  service: { name: string; category: string; pricing: Pricing; hours: number; quantity: number; unit: string; overtimeHours: number; zone: Zone };
+  /** "Standard 8-hour shift + 2 h beyond the shift × KES 100", "120 feet × KES 60"… */
+  summary: string;
   area: string;
   distanceKm: number;
   earn: number;

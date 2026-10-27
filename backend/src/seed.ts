@@ -1,59 +1,93 @@
-import { many, type Db } from "./config/db.js";
+import { one, type Db } from "./config/db.js";
 
-// The trades and their starting rates (PRD 4.2 and View 1). These are the catalogue, not
-// sample data: the operations team edits names and rates in Admin › Rates, and each job
-// keeps the rate it was booked at. Inserted only when missing, so edits survive restarts.
+// The trades and their rates, from the Construction & Site Labor Rate Schedule. This is the
+// catalogue, not sample data: the operations team edits it in Admin › Trades and rates, and
+// each job keeps the rate it was booked at. A catalogue version is recorded in settings, so a
+// new schedule is applied once and later edits survive restarts.
+//
+// Billing rules from the schedule, enforced in pricing.ts and jobflow.ts:
+// - Standard day shifts are 8 hours; hours beyond that are billed hourly where an hourly rate exists.
+// - Site manager visits are a flat rate by zone: within the Nairobi area, or out of station.
+// - Plumber, welder and general fundi work is a flat rate per task or engagement.
+// - Contractor overhead and specialised engineering review fees are not in the schedule; they
+//   are quoted under separate scope contracts.
+
+export const CATALOG_VERSION = 2;
+
+const LABOR = "General labor services";
+const TRADES = "Specialized trades and skilled crafts";
+const MANAGEMENT = "Management and supervisory roles";
 
 const CATEGORIES = [
-  { id: "plumbing", name: "Plumbing", trade: "plumber", blurb: "Leaks, blockages, toilets, tanks and pumps", requires_certificate: true, sort: 1 },
-  { id: "electrical", name: "Electrical", trade: "electrician", blurb: "Sockets, lights, wiring and faults", requires_certificate: true, sort: 2 },
-  { id: "site_management", name: "Site Management", trade: "site manager", blurb: "Supervision, inspections and progress reports", requires_certificate: false, sort: 3 },
-  { id: "general_labor", name: "General Labor", trade: "general worker", blurb: "Digging, loading, clearing and site help", requires_certificate: false, sort: 4 },
+  { id: "general_labor", name: "General Labor", trade: "general worker", blurb: "Day shifts, hourly help, heavy labor and earthworks", section: LABOR, requires_certificate: false, sort: 1 },
+  { id: "plumbing", name: "Plumbing", trade: "plumber", blurb: "Repairs, fittings, installations and blockages", section: TRADES, requires_certificate: true, sort: 2 },
+  { id: "electrical", name: "Electrical", trade: "electrician", blurb: "Wiring, faults, sockets and fittings", section: TRADES, requires_certificate: true, sort: 3 },
+  { id: "welding", name: "Welding", trade: "welder", blurb: "Gates, grilles, frames and metal repairs", section: TRADES, requires_certificate: false, sort: 4 },
+  { id: "fundi", name: "General Fundis", trade: "fundi", blurb: "Masonry, carpentry, painting and repairs", section: TRADES, requires_certificate: false, sort: 5 },
+  { id: "site_management", name: "Site Management", trade: "supervisor", blurb: "Site manager visits and foremen", section: MANAGEMENT, requires_certificate: false, sort: 6 },
 ];
 
-type Svc = { name: string; description: string; pricing: "flat" | "hourly"; rate: number; minHours?: number };
+type Svc = {
+  name: string;
+  description: string;
+  pricing: "flat" | "hourly" | "shift" | "per_unit";
+  rate: number;
+  unit: "task" | "visit" | "shift" | "hour" | "ft";
+  minQty?: number;
+  shiftHours?: number;
+  overtimeRate?: number;
+  zone?: "nairobi" | "outside";
+};
+
+const MATERIALS = "Materials are extra and need your approval in the app.";
 
 const SERVICES: Record<string, Svc[]> = {
-  plumbing: [
-    { name: "Fix a leaking tap or pipe", description: "Replace washers, seals or a short section of pipe. Parts are extra.", pricing: "flat", rate: 1500 },
-    { name: "Unblock a drain, sink or toilet", description: "Clear one blockage with rods or a plunger.", pricing: "flat", rate: 2000 },
-    { name: "Toilet or cistern repair", description: "Flush mechanism, fill valve, seat or leaking cistern.", pricing: "flat", rate: 2000 },
-    { name: "Install a water tank or pump", description: "Fit and connect a tank or booster pump you have bought.", pricing: "flat", rate: 4500 },
-    { name: "Plumber by the hour", description: "Anything else: you set the hours, the plumber brings tools.", pricing: "hourly", rate: 800, minHours: 2 },
-  ],
-  electrical: [
-    { name: "Repair a socket or switch", description: "Replace or rewire one socket, switch or isolator.", pricing: "flat", rate: 1200 },
-    { name: "Fit a light or ceiling fan", description: "Install one fitting on an existing point.", pricing: "flat", rate: 1500 },
-    { name: "Find and fix a fault", description: "Tripping breakers, dead circuits or flickering lights.", pricing: "hourly", rate: 1000, minHours: 1 },
-    { name: "Wire a room", description: "New points and cabling for one room, to standard.", pricing: "flat", rate: 6000 },
-    { name: "Electrician by the hour", description: "Anything else: you set the hours.", pricing: "hourly", rate: 1000, minHours: 2 },
-  ],
-  site_management: [
-    { name: "Site inspection and report", description: "A visit, photos and a written report on progress and quality.", pricing: "flat", rate: 4000 },
-    { name: "Site manager, half day", description: "Up to 4 hours supervising crews, deliveries and quality.", pricing: "flat", rate: 3500 },
-    { name: "Site manager, full day", description: "Up to 8 hours on site.", pricing: "flat", rate: 6500 },
-    { name: "Site manager by the hour", description: "Short visits or extra time.", pricing: "hourly", rate: 900, minHours: 2 },
-  ],
   general_labor: [
-    { name: "General worker by the hour", description: "Carrying, mixing, cleaning and site help.", pricing: "hourly", rate: 350, minHours: 4 },
-    { name: "General worker, full day", description: "Up to 8 hours on site.", pricing: "flat", rate: 1500 },
-    { name: "Clear and load rubble", description: "Clearing, bagging and loading by the hour. Transport not included.", pricing: "hourly", rate: 400, minHours: 3 },
-    { name: "Digging and trenching", description: "Foundations, drainage or cable trenches by the hour.", pricing: "hourly", rate: 450, minHours: 4 },
+    { name: "General worker, standard shift", description: "One worker for a standard 8-hour day shift. Hours beyond 8 are billed at KES 100 per hour.", pricing: "shift", rate: 800, unit: "shift", shiftHours: 8, overtimeRate: 100 },
+    { name: "General worker, by the hour", description: "Carrying, mixing, cleaning and general site help, billed per hour.", pricing: "hourly", rate: 100, unit: "hour", minQty: 1 },
+    { name: "Heavy labor: clearing, loading and bagging", description: "Site clearing, loading and bagging, billed per hour. Transport isn't included.", pricing: "hourly", rate: 200, unit: "hour", minQty: 1 },
+    { name: "Earthworks: digging and trenching", description: "Digging and trenching, billed per foot.", pricing: "per_unit", rate: 60, unit: "ft", minQty: 1 },
+  ],
+  plumbing: [{ name: "Plumbing job", description: `One plumbing task or engagement at a fixed rate: repairs, fittings, installations or blockages. ${MATERIALS}`, pricing: "flat", rate: 2000, unit: "task" }],
+  electrical: [{ name: "Electrician, by the hour", description: `Wiring, fault finding, sockets and fittings, billed per hour. ${MATERIALS}`, pricing: "hourly", rate: 250, unit: "hour", minQty: 1 }],
+  welding: [{ name: "Welding job", description: `One welding task or engagement at a fixed rate: gates, grilles, frames or repairs. ${MATERIALS}`, pricing: "flat", rate: 2000, unit: "task" }],
+  fundi: [{ name: "General fundi job", description: `One task or engagement at a fixed rate: masonry, carpentry, painting, tiling or general repairs. ${MATERIALS}`, pricing: "flat", rate: 1600, unit: "task" }],
+  site_management: [
+    { name: "Site manager visit, Nairobi", description: "A site manager visits your site in the Nairobi area to inspect work and review progress.", pricing: "flat", rate: 15_000, unit: "visit", zone: "nairobi" },
+    { name: "Site manager visit, outside Nairobi", description: "The same visit for a site outside the Nairobi area (out of station).", pricing: "flat", rate: 35_000, unit: "visit", zone: "outside" },
+    { name: "Foreman, standard shift", description: "A foreman supervising your crew for a standard 8-hour day shift.", pricing: "shift", rate: 2000, unit: "shift", shiftHours: 8 },
   ],
 };
 
 export async function seedCatalog(db: Db, log: (m: string) => void = () => {}) {
-  for (const c of CATEGORIES) {
-    await db.query(`insert into categories (id, name, trade, blurb, requires_certificate, sort) values ($1,$2,$3,$4,$5,$6) on conflict (id) do nothing`, [
-      c.id, c.name, c.trade, c.blurb, c.requires_certificate, c.sort,
-    ]);
-  }
-  const have = new Set((await many<{ category_id: string }>(db, `select distinct category_id from services`)).map((r) => r.category_id));
-  for (const [cat, list] of Object.entries(SERVICES)) {
-    if (have.has(cat)) continue;
-    for (const [i, s] of list.entries()) {
-      await db.query(`insert into services (category_id, name, description, pricing, rate_kes, min_hours, sort) values ($1,$2,$3,$4,$5,$6,$7)`, [cat, s.name, s.description, s.pricing, s.rate, s.minHours ?? 1, i + 1]);
+  const v = await one<{ value: unknown }>(db, `select value from settings where key = 'catalog_version'`);
+  if (v && Number(v.value) >= CATALOG_VERSION) return;
+  await db.tx(async (q) => {
+    for (const c of CATEGORIES) {
+      // Certificates and bookability are the team's call once set, so an existing category keeps them.
+      await q.query(
+        `insert into categories (id, name, trade, blurb, section, requires_certificate, sort) values ($1,$2,$3,$4,$5,$6,$7)
+         on conflict (id) do update set name = excluded.name, trade = excluded.trade, blurb = excluded.blurb, section = excluded.section, sort = excluded.sort`,
+        [c.id, c.name, c.trade, c.blurb, c.section, c.requires_certificate, c.sort],
+      );
     }
-    log(`catalogue: ${list.length} ${cat} services`);
-  }
+    // Earlier services stay in the table for the jobs that reference them, but can't be booked.
+    const old = await q.query<{ id: string }>(`update services set active = false, updated_at = now() where active returning id`);
+    let n = 0;
+    for (const [cat, list] of Object.entries(SERVICES)) {
+      for (const [i, s] of list.entries()) {
+        await q.query(
+          `insert into services (category_id, name, description, pricing, rate_kes, unit_label, min_hours, shift_hours, overtime_rate_kes, zone, sort)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [cat, s.name, s.description, s.pricing, s.rate, s.unit, s.minQty ?? 1, s.shiftHours ?? 8, s.overtimeRate ?? null, s.zone ?? "nairobi", i + 1],
+        );
+        n++;
+      }
+    }
+    await q.query(
+      `insert into settings (key, value, updated_at) values ('catalog_version', $1::jsonb, now()) on conflict (key) do update set value = excluded.value, updated_at = now()`,
+      [JSON.stringify(CATALOG_VERSION)],
+    );
+    log(`catalogue v${CATALOG_VERSION}: ${n} services in ${CATEGORIES.length} trades${old.rows.length ? `, ${old.rows.length} earlier services retired` : ""}`);
+  });
 }

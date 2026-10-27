@@ -83,7 +83,7 @@ function Footer() {
         <span>© {new Date().getFullYear()} Mjengo O'clock · Nairobi</span>
         <Link to="/legal/terms">Terms</Link>
         <Link to="/legal/privacy">Privacy</Link>
-        <Link to="/legal/policies">Fees, cancellations and disputes</Link>
+        <Link to="/legal/policies">Rates, fees and cancellations</Link>
         <Link to="/help">Help and safety</Link>
       </div>
     </footer>

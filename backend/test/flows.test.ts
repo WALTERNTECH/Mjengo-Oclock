@@ -182,19 +182,19 @@ describe("sign-in and booking", () => {
     const phone = "0799000222";
     const sent = ok(await call("POST", "/api/auth/request-code", { phone }));
     const v = ok(await call("POST", "/api/auth/verify", { phone, code: sent.devCode }));
-    const body = { serviceId: await svc("Fix a leaking tap or pipe"), address: "Somewhere", ...KILIMANI, description: "A tap that drips constantly." };
+    const body = { serviceId: await svc("Plumbing job"), address: "Somewhere", ...KILIMANI, description: "A tap that drips constantly." };
     assert.equal((await call("POST", "/api/jobs", body, v.token)).status, 400, "name first");
     ok(await call("PATCH", "/api/me", { fullName: "Akinyi Otieno" }, v.token));
     assert.equal((await call("POST", "/api/jobs", body, v.token)).body.error.code, "terms_required");
     ok(await call("PATCH", "/api/me", { acceptTerms: true }, v.token));
     const far = await call("POST", "/api/jobs", { ...body, ...MOMBASA }, v.token);
     assert.match(far.body.error.message, /Nairobi/);
-    const q = ok(await call("POST", "/api/quote", { serviceId: await svc("General worker by the hour"), hours: 6 }));
-    assert.deepEqual([q.quote.base, q.quote.clientFee, q.quote.total], [2100, 189, 2289]);
+    const q = ok(await call("POST", "/api/quote", { serviceId: await svc("General worker, by the hour"), hours: 6 }));
+    assert.deepEqual([q.quote.base, q.quote.clientFee, q.quote.total], [600, 54, 654]);
     const j = ok(await call("POST", "/api/jobs", { ...body, clientKey: "same-tap-twice" }, v.token), 201).job;
     const again = ok(await call("POST", "/api/jobs", { ...body, clientKey: "same-tap-twice" }, v.token), 201).job;
     assert.equal(again.id, j.id, "a retried booking is not created twice");
-    assert.equal(j.price.total, 1635);
+    assert.equal(j.price.total, 2180);
     const photos = await upload(`/api/jobs/${j.id}/photos`, {}, { photos: 3 }, v.token);
     assert.equal(photos.body.job.photos.length, 3);
     assert.equal((await upload(`/api/jobs/${j.id}/photos`, {}, { photos: 1 }, v.token)).status, 400, "three photos at most");
@@ -211,18 +211,18 @@ describe("dispatch", () => {
     const far = await worker("Otieno Were", "plumbing", KASARANI);
     const pending = await worker("Brian Unapproved", "plumbing", KILIMANI, { approve: false });
     const client = await signIn("Wanjiru Mwangi");
-    const j = await book(client, "Fix a leaking tap or pipe");
+    const j = await book(client, "Plumbing job");
     const confirmed = await payHold(client, j.id);
     assert.equal(confirmed.status, "SEARCHING");
     assert.equal(confirmed.escrow, "HELD");
-    assert.match(await lastSms(client.phone), /booking MJ-.* confirmed .*KES 1,635 is held/);
+    assert.match(await lastSms(client.phone), /booking MJ-.* confirmed .*KES 2,180 is held/);
 
     const o1 = await until(() => offerFor(near), "offer to the nearest");
     assert.equal(await offerFor(far), null);
-    assert.equal(o1.earn, 1365);
+    assert.equal(o1.earn, 1820);
     assert.equal(o1.area, "Kilimani");
     assert.ok(!("address" in o1), "no full address before accepting");
-    assert.match(await lastSms(near.phone), /new job .* km away in Kilimani .*You earn KES 1,365/);
+    assert.match(await lastSms(near.phone), /new job .* km away in Kilimani .*You earn KES 1,820/);
     assert.equal((await call("GET", "/api/worker/offer", undefined, pending.token)).status, 403, "unapproved workers never get offers");
 
     ok(await call("POST", `/api/worker/offers/${o1.offerId}/decline`, {}, near.token));
@@ -247,7 +247,7 @@ describe("dispatch", () => {
   });
 });
 
-async function acceptedJob(category = "plumbing", service = "Fix a leaking tap or pipe", at = WESTLANDS) {
+async function acceptedJob(category = "plumbing", service = "Plumbing job", at = WESTLANDS) {
   await offDuty(category);
   const w = await worker(`Worker ${n}`, category, at);
   const c = await signIn(`Client ${n}`);
@@ -294,7 +294,7 @@ describe("a job from acceptance to payout", () => {
     ok(await upload(`/api/worker/jobs/${j.id}/complete`, {}, { photos: 1 }, w.token));
     v = await job(c, j.id);
     assert.equal(v.status, "COMPLETED");
-    assert.deepEqual([v.invoice.subtotal, v.invoice.fee, v.invoice.total, v.invoice.paid], [2700, 243, 2943, 2943]);
+    assert.deepEqual([v.invoice.subtotal, v.invoice.fee, v.invoice.total, v.invoice.paid], [3200, 288, 3488, 3488]);
     const link = (await lastSms(c.phone)).match(/\/invoice\/(MJ-\w+)\?t=([\w-]+)/)!;
     const inv = ok(await call("GET", `/api/invoice/${link[1]}?t=${link[2]}`));
     assert.equal(inv.invoice.lines.length, 2);
@@ -305,30 +305,30 @@ describe("a job from acceptance to payout", () => {
       const p = await payouts(j.id);
       return p.length && p.every((x) => x.status === "PAID") && p;
     }, "payout");
-    assert.deepEqual(paid, [{ kind: "WORKER", amount_kes: 2457, status: "PAID" }]);
+    assert.deepEqual(paid, [{ kind: "WORKER", amount_kes: 2912, status: "PAID" }]);
     const settled = (await one<{ platform_kes: number; escrow: string; status: string }>(db, `select platform_kes, escrow, status from jobs where id = $1`, [j.id]))!;
-    assert.deepEqual(settled, { platform_kes: 486, escrow: "RELEASED", status: "CLOSED" });
-    assert.match(await lastSms(w.phone), /KES 2,457 for job .* has been sent to your M-Pesa/);
+    assert.deepEqual(settled, { platform_kes: 576, escrow: "RELEASED", status: "CLOSED" });
+    assert.match(await lastSms(w.phone), /KES 2,912 for job .* has been sent to your M-Pesa/);
 
     const tip = ok(await call("POST", `/api/jobs/${j.id}/tip`, { amount: 200, phone: c.phone }, c.token), 202);
     assert.equal(tip.amount, 200);
     await until(async () => (await payouts(j.id)).some((p) => p.kind === "TIP" && p.status === "PAID" && p.amount_kes === 200), "tip paid in full");
     ok(await call("POST", `/api/worker/jobs/${j.id}/rate`, { stars: 4, review: "Clear instructions" }, w.token));
     const earnings = ok(await call("GET", "/api/worker/earnings", undefined, w.token));
-    assert.equal(earnings.totals.paid, 2657);
+    assert.equal(earnings.totals.paid, 3112);
   });
 
-  it("does not charge a declined extra", async () => {
-    const { w, c, j } = await acceptedJob();
+  it("bills extra time on a shift at its overtime rate, and doesn't charge a declined extra", async () => {
+    const { w, c, j } = await acceptedJob("general_labor", "General worker, standard shift");
     ok(await call("POST", `/api/worker/jobs/${j.id}/arrive`, {}, w.token));
     ok(await upload(`/api/worker/jobs/${j.id}/extras`, { kind: "hours", hours: "2", reason: "Wall needs chasing" }, { photo: 1 }, w.token), 201);
     const x = (await job(c, j.id)).extras[0];
-    assert.equal(x.amount, 1600, "two hours at the plumbing hourly rate");
+    assert.equal(x.amount, 200, "two hours past the shift at KES 100 an hour");
     ok(await call("POST", `/api/jobs/${j.id}/extras/${x.id}`, { approve: false }, c.token));
     ok(await call("POST", `/api/worker/jobs/${j.id}/start`, {}, w.token));
     ok(await call("POST", `/api/worker/jobs/${j.id}/complete`, {}, w.token));
     const v = await job(c, j.id);
-    assert.equal(v.invoice.total, 1635);
+    assert.equal(v.invoice.total, 872);
   });
 });
 
@@ -336,13 +336,13 @@ describe("cancellation rules (PRD section 6)", () => {
   it("is free before acceptance and refunds the hold", async () => {
     await offDuty("plumbing");
     const c = await signIn("Early Canceller");
-    const j = await book(c, "Fix a leaking tap or pipe");
+    const j = await book(c, "Plumbing job");
     await payHold(c, j.id);
     const q = ok(await call("GET", `/api/jobs/${j.id}/cancel-quote`, undefined, c.token)).quote;
-    assert.deepEqual([q.fee, q.refund], [0, 1635]);
+    assert.deepEqual([q.fee, q.refund], [0, 2180]);
     ok(await call("POST", `/api/jobs/${j.id}/cancel`, { expectedFee: 0 }, c.token));
     await until(async () => (await payouts(j.id))[0]?.status === "PAID", "refund");
-    assert.deepEqual(await payouts(j.id), [{ kind: "REFUND", amount_kes: 1635, status: "PAID" }]);
+    assert.deepEqual(await payouts(j.id), [{ kind: "REFUND", amount_kes: 2180, status: "PAID" }]);
   });
 
   it("is free within 5 minutes of booking after acceptance, then charges the late fee to the worker", async () => {
@@ -356,7 +356,7 @@ describe("cancellation rules (PRD section 6)", () => {
     ok(await call("POST", `/api/jobs/${b.j.id}/cancel`, { expectedFee: 200 }, b.c.token));
     await until(async () => (await payouts(b.j.id)).every((p) => p.status === "PAID") && (await payouts(b.j.id)).length === 2, "fee and refund");
     assert.deepEqual(await payouts(b.j.id), [
-      { kind: "REFUND", amount_kes: 1435, status: "PAID" },
+      { kind: "REFUND", amount_kes: 1980, status: "PAID" },
       { kind: "WORKER", amount_kes: 200, status: "PAID" },
     ]);
     assert.ok((await sms(b.w.phone)).some((m) => /cancelled job .*KES 200 cancellation fee/.test(m.body)));
@@ -393,7 +393,7 @@ describe("no-shows", () => {
     await runHousekeepingOnce();
     assert.match(await lastSms(c.phone), /hasn't arrived .*cancel at no charge/);
     const q = ok(await call("GET", `/api/jobs/${j.id}/cancel-quote`, undefined, c.token)).quote;
-    assert.deepEqual([q.fee, q.refund], [0, 1635]);
+    assert.deepEqual([q.fee, q.refund], [0, 2180]);
     ok(await call("POST", `/api/jobs/${j.id}/cancel`, { expectedFee: 0 }, c.token));
     const wp = (await one<{ no_shows: number; flagged: boolean }>(db, `select no_shows, flagged from worker_profiles where user_id = $1`, [w.id]))!;
     assert.deepEqual(wp, { no_shows: 1, flagged: true });
@@ -408,7 +408,7 @@ describe("no-shows", () => {
     ok(await call("POST", `/api/worker/jobs/${j.id}/no-show`, { note: "Gate locked, no answer on the phone" }, w.token));
     assert.equal((await job(c, j.id)).outcome, "client_no_show");
     await until(async () => (await payouts(j.id)).length === 2, "payouts");
-    assert.deepEqual((await payouts(j.id)).map((p) => [p.kind, p.amount_kes]), [["REFUND", 1135], ["WORKER", 500]]);
+    assert.deepEqual((await payouts(j.id)).map((p) => [p.kind, p.amount_kes]), [["REFUND", 1680], ["WORKER", 500]]);
   });
 });
 
@@ -427,12 +427,12 @@ describe("disputes and auto-release", () => {
     assert.equal((await call("POST", `/api/jobs/${j.id}/approve`, {}, c.token)).status, 409);
     const open = ok(await call("GET", "/api/admin/disputes", undefined, await adminToken())).disputes;
     assert.ok(open.some((d: any) => d.job_id === j.id));
-    const bad = await call("POST", `/api/admin/disputes/${j.id}/resolve`, { decision: "SPLIT", workerGross: 1500, note: "Half the work held" }, await adminToken());
+    const bad = await call("POST", `/api/admin/disputes/${j.id}/resolve`, { decision: "SPLIT", workerGross: 2500, note: "More than the work value" }, await adminToken());
     assert.equal(bad.status, 400);
     ok(await call("POST", `/api/admin/disputes/${j.id}/resolve`, { decision: "SPLIT", workerGross: 750, note: "The seal was fixed but the pipe was not." }, await adminToken()));
     await until(async () => (await payouts(j.id)).length === 2, "split payouts");
-    // Worker: 750 less 9% (68) = 682. Client: 1,635 less 750 and its 9% fee (68) = 817. Platform keeps 136.
-    assert.deepEqual((await payouts(j.id)).map((p) => [p.kind, p.amount_kes]), [["REFUND", 817], ["WORKER", 682]]);
+    // Worker: 750 less 9% (68) = 682. Client: 2,180 less 750 and its 9% fee (68) = 1,362. Platform keeps 136.
+    assert.deepEqual((await payouts(j.id)).map((p) => [p.kind, p.amount_kes]), [["REFUND", 1362], ["WORKER", 682]]);
     assert.equal((await one<{ platform_kes: number }>(db, `select platform_kes from jobs where id = $1`, [j.id]))!.platform_kes, 136);
     assert.ok((await sms(c.phone)).some((m) => /decision on job .*split/.test(m.body)));
     assert.ok((await sms(w.phone)).some((m) => /decision on job .*KES 682/.test(m.body)));
@@ -444,7 +444,7 @@ describe("disputes and auto-release", () => {
     await runHousekeepingOnce();
     const r = (await one<{ status: string; auto_released: boolean }>(db, `select status, auto_released from jobs where id = $1`, [j.id]))!;
     assert.deepEqual(r, { status: "CLOSED", auto_released: true });
-    await until(async () => (await payouts(j.id))[0]?.amount_kes === 1365, "auto-released payout");
+    await until(async () => (await payouts(j.id))[0]?.amount_kes === 1820, "auto-released payout");
   });
 
   it("refuses a dispute after the 24-hour window", async () => {
@@ -457,7 +457,7 @@ describe("disputes and auto-release", () => {
 
 describe("quality and safety", () => {
   it("suspends a worker whose last 10 ratings average below 3.5", async () => {
-    const { w, c, j } = await acceptedJob("electrical", "Repair a socket or switch");
+    const { w, c, j } = await acceptedJob("electrical", "Electrician, by the hour");
     for (const step of ["arrive", "start", "complete"]) ok(await call("POST", `/api/worker/jobs/${j.id}/${step}`, {}, w.token));
     // Nine earlier 3-star ratings from other clients, then this client's 2: average 2.9.
     for (let i = 0; i < 9; i++) {
@@ -472,7 +472,7 @@ describe("quality and safety", () => {
   });
 
   it("flags probation jobs for a new worker's first five", async () => {
-    const { j } = await acceptedJob("general_labor", "General worker, full day");
+    const { j } = await acceptedJob("general_labor", "General worker, standard shift");
     assert.equal((await one<{ probation: boolean }>(db, `select probation from jobs where id = $1`, [j.id]))!.probation, true);
   });
 
@@ -486,6 +486,94 @@ describe("quality and safety", () => {
     assert.match(await lastSms("+254700000999"), /EMERGENCY on MJ-/);
     const reports = ok(await call("GET", "/api/admin/reports", undefined, await adminToken())).reports;
     assert.equal(reports[0].kind, "emergency");
+  });
+});
+
+describe("rate schedule", () => {
+  it("lists every rate in the construction and site labour schedule", async () => {
+    const cats = ok(await call("GET", "/api/catalog")).categories as { id: string; section: string; services: { name: string; pricing: string; rate: number; unitPhrase: string; overtimeRate: number | null; zone: string }[] }[];
+    const got = cats.flatMap((c) => c.services.map((s) => [c.id, s.name, s.pricing, s.rate, s.unitPhrase]));
+    assert.deepEqual(got, [
+      ["general_labor", "General worker, standard shift", "shift", 800, "per 8-hour shift"],
+      ["general_labor", "General worker, by the hour", "hourly", 100, "per hour"],
+      ["general_labor", "Heavy labor: clearing, loading and bagging", "hourly", 200, "per hour"],
+      ["general_labor", "Earthworks: digging and trenching", "per_unit", 60, "per foot"],
+      ["plumbing", "Plumbing job", "flat", 2000, "per task"],
+      ["electrical", "Electrician, by the hour", "hourly", 250, "per hour"],
+      ["welding", "Welding job", "flat", 2000, "per task"],
+      ["fundi", "General fundi job", "flat", 1600, "per task"],
+      ["site_management", "Site manager visit, Nairobi", "flat", 15000, "per visit"],
+      ["site_management", "Site manager visit, outside Nairobi", "flat", 35000, "per visit"],
+      ["site_management", "Foreman, standard shift", "shift", 2000, "per 8-hour shift"],
+    ]);
+    assert.deepEqual([...new Set(cats.map((c) => c.section))], ["General labor services", "Specialized trades and skilled crafts", "Management and supervisory roles"]);
+    const shift = cats[0].services[0];
+    assert.equal(shift.overtimeRate, 100, "hours past the shift bill at the general worker hourly rate");
+    assert.equal(cats.find((c) => c.id === "site_management")!.services[2].overtimeRate, null, "the schedule gives no hourly rate for a foreman");
+  });
+
+  it("bills hours beyond an 8-hour shift hourly, only where the schedule has an hourly rate", async () => {
+    const c = await signIn("Shift Booker");
+    const j = await book(c, "General worker, standard shift", { overtimeHours: 2 });
+    assert.deepEqual([j.price.base, j.price.total], [1000, 1090]);
+    assert.deepEqual(j.priceLines.map((l: any) => [l.label, l.amount]), [["General worker, standard shift", 800], ["Overtime", 200]]);
+    const foreman = await call("POST", "/api/jobs", { serviceId: await svc("Foreman, standard shift"), address: "Kilimani, Nairobi", ...KILIMANI, description: "Supervise the masons on the slab.", overtimeHours: 1 }, c.token);
+    assert.equal(foreman.status, 400);
+    assert.match(foreman.body.error.message, /standard 8-hour shift/);
+  });
+
+  it("prices earthworks per foot, and extra feet at the same rate", async () => {
+    await offDuty("general_labor");
+    const w = await worker("Digger Otieno", "general_labor", WESTLANDS);
+    const c = await signIn("Trench Owner");
+    const j = await book(c, "Earthworks: digging and trenching", { quantity: 120 });
+    assert.deepEqual([j.price.base, j.price.total], [7200, 7848]);
+    assert.equal(j.priceLines[0].detail, "120 feet × KES 60");
+    await payHold(c, j.id);
+    const o = await until(() => offerFor(w), "offer");
+    assert.match(o.summary, /120 feet/);
+    ok(await call("POST", `/api/worker/offers/${o.offerId}/accept`, {}, w.token));
+    for (const step of ["arrive", "start"]) ok(await call("POST", `/api/worker/jobs/${j.id}/${step}`, {}, w.token));
+    assert.deepEqual(ok(await call("GET", `/api/worker/jobs/${j.id}`, undefined, w.token)).job.extraRates, { hourly: 100, unit: 60, unitLabel: "ft" });
+    ok(await upload(`/api/worker/jobs/${j.id}/extras`, { kind: "units", units: "30", reason: "Rock band; trench runs 30 ft further" }, { photo: 1 }, w.token), 201);
+    assert.match(await lastSms(c.phone), /asks to add 30 more feet \(KES 1,962\)/);
+    const x = (await job(c, j.id)).extras[0];
+    assert.deepEqual([x.kind, x.units, x.amount], ["units", 30, 1800]);
+    ok(await call("POST", `/api/jobs/${j.id}/extras/${x.id}`, { approve: true, phone: c.phone }, c.token), 202);
+    await until(async () => (await job(c, j.id)).extras[0].status === "APPROVED", "extra paid");
+    ok(await call("POST", `/api/worker/jobs/${j.id}/complete`, {}, w.token));
+    const inv = (await job(c, j.id)).invoice;
+    assert.deepEqual(inv.lines.map((l: any) => [l.label, l.amount]), [["Earthworks: digging and trenching", 7200], ["Extra feet (30)", 1800]]);
+    assert.equal(inv.total, 9810);
+  });
+
+  it("prices site manager visits by zone: Nairobi area or out of station", async () => {
+    const c = await signIn("Site Owner");
+    const NAKURU = { lat: -0.3031, lng: 36.08 };
+    const body = async (name: string, at: { lat: number; lng: number }) => ({ serviceId: await svc(name), address: "Site, Kenya", ...at, description: "Inspect the second-floor slab before casting." });
+    const wrongIn = await call("POST", "/api/jobs", await body("Site manager visit, Nairobi", MOMBASA), c.token);
+    assert.match(wrongIn.body.error.message, /out-of-station rate/);
+    const wrongOut = await call("POST", "/api/jobs", await body("Site manager visit, outside Nairobi", KILIMANI), c.token);
+    assert.match(wrongOut.body.error.message, /Nairobi visit rate/);
+    const nairobi = ok(await call("POST", "/api/jobs", await body("Site manager visit, Nairobi", KILIMANI), c.token), 201).job;
+    const nakuru = ok(await call("POST", "/api/jobs", await body("Site manager visit, outside Nairobi", NAKURU), c.token), 201).job;
+    assert.deepEqual([nairobi.price.total, nakuru.price.total], [16350, 38150]);
+    assert.equal(nakuru.service.zone, "outside");
+    const plumbingOut = await call("POST", "/api/jobs", { ...(await body("Plumbing job", NAKURU)) }, c.token);
+    assert.match(plumbingOut.body.error.message, /only cover the Nairobi area/);
+  });
+
+  it("applies a new schedule to an existing catalogue once, keeping old services for past jobs", async () => {
+    const db2 = await pgliteDb();
+    await migrate(db2);
+    await db2.query(`insert into categories (id, name, trade) values ('plumbing', 'Plumbing', 'plumber')`);
+    await db2.query(`insert into services (category_id, name, pricing, rate_kes) values ('plumbing', 'Fix a leaking tap', 'flat', 1500)`);
+    await seedCatalog(db2);
+    await seedCatalog(db2);
+    const rows = await many<{ name: string; active: boolean }>(db2, `select name, active from services order by name`);
+    assert.equal(rows.find((r) => r.name === "Fix a leaking tap")!.active, false);
+    assert.equal(rows.filter((r) => r.active).length, 11, "the schedule is added once");
+    await db2.close();
   });
 });
 

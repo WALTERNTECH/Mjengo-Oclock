@@ -8,6 +8,6 @@
   <path d="M25 26.2 32 33 43.2 21.4" fill="none" stroke="#1DB954" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="32" cy="33" r="2.6" fill="#1DB954"/>
 </svg>
-<text x="320" y="318" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="92" fill="#0B0F0C" letter-spacing="-2">Mjengo <tspan fill="#0B7A3B">O'clock</tspan></text>
-<text x="324" y="380" font-family="Arial, Helvetica, sans-serif" font-size="32" fill="#4A524D">Vetted trades on demand in Nairobi</text>
+<text x="320" y="318" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="76" fill="#0B0F0C">Mjengo <tspan fill="#0B7A3B">O'clock</tspan></text>
+<text x="324" y="376" font-family="Arial, Helvetica, sans-serif" font-size="30" fill="#4A524D">Construction workers on demand in Nairobi</text>
 </svg>

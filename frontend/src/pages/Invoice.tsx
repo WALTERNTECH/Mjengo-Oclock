@@ -28,7 +28,7 @@ export default function Invoice() {
       <div className="invoice">
         <div className="invoice-head">
           <div className="stack g-4">
-            <span className="strong" style={{ fontSize: 18 }}>
+            <span className="strong" style={{ fontSize: 16 }}>
               Invoice {inv.number}
             </span>
             <span className="small muted">Completed {dateTime(inv.completedAt)}</span>

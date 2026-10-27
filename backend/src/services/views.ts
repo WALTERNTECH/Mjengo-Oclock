@@ -2,8 +2,8 @@ import { many, one, type Q } from "../config/db.js";
 import { shortName } from "../utils/kenya.js";
 import { mediaUrl } from "../utils/media.js";
 import { areaOf } from "./dispatch.js";
-import { ACTIVE, cancelQuote, invoiceLink, TRACKING, type JobRow } from "./jobflow.js";
-import { pct } from "./pricing.js";
+import { ACTIVE, cancelQuote, hourlyRateFor, invoiceLink, TRACKING, unitWord, type JobRow } from "./jobflow.js";
+import { pct, unitPhrase } from "./pricing.js";
 import type { Settings } from "./settings.js";
 
 // What each person may see of a job. The client sees the worker's verified name, photo and
@@ -36,20 +36,50 @@ async function photos(q: Q, jobId: string, kinds: string[]) {
 }
 
 async function extras(q: Q, jobId: string) {
-  const rows = await many<{ id: string; kind: string; hours: number | null; amount_kes: number; client_fee_kes: number; reason: string; photo_media_id: string | null; status: string; created_at: Date; responded_at: Date | null }>(
+  const rows = await many<{ id: string; kind: string; hours: number | null; units: number | null; amount_kes: number; client_fee_kes: number; reason: string; photo_media_id: string | null; status: string; created_at: Date; responded_at: Date | null }>(
     q,
     `select * from extra_requests where job_id = $1 order by created_at`,
     [jobId],
   );
-  return rows.map((x) => ({ id: x.id, kind: x.kind, hours: x.hours, amount: x.amount_kes, fee: x.client_fee_kes, total: x.amount_kes + x.client_fee_kes, reason: x.reason, photo: mediaUrl(x.photo_media_id), status: x.status, at: x.created_at }));
+  return rows.map((x) => ({
+    id: x.id, kind: x.kind, hours: x.hours, units: x.units, amount: x.amount_kes, fee: x.client_fee_kes, total: x.amount_kes + x.client_fee_kes, reason: x.reason,
+    photo: mediaUrl(x.photo_media_id), status: x.status, at: x.created_at,
+  }));
+}
+
+const money = (n: number) => `KES ${Math.round(n).toLocaleString("en-KE")}`;
+
+/** The booked work as invoice lines: the rate as billed, and overtime past a shift on its own line. */
+export function priceLines(j: Pick<JobRow, "service_name" | "pricing" | "rate_kes" | "hours" | "quantity" | "unit_label" | "shift_hours" | "overtime_hours" | "overtime_rate_kes" | "base_kes">) {
+  if (j.pricing === "shift") {
+    const ot = Math.round(Number(j.overtime_hours) * (j.overtime_rate_kes ?? 0));
+    const lines = [{ label: j.service_name, detail: `Standard ${Number(j.shift_hours ?? 8)}-hour shift`, amount: j.base_kes - ot }];
+    if (ot > 0) lines.push({ label: "Overtime", detail: `${Number(j.overtime_hours)} h beyond the shift × ${money(j.overtime_rate_kes!)}`, amount: ot });
+    return lines;
+  }
+  const detail =
+    j.pricing === "hourly"
+      ? `${Number(j.hours)} h × ${money(j.rate_kes)}`
+      : j.pricing === "per_unit"
+        ? `${Number(j.quantity)} ${unitWord(j.unit_label, Number(j.quantity))} × ${money(j.rate_kes)}`
+        : `Fixed rate per ${j.unit_label || "task"}`;
+  return [{ label: j.service_name, detail, amount: j.base_kes }];
 }
 
 /** The itemised invoice (PRD 4.4): the price, approved extras, the fee, tip, and what came back. */
 export async function invoice(q: Q, j: JobRow) {
-  const xs = await many<{ kind: string; hours: number | null; amount_kes: number; client_fee_kes: number; reason: string }>(q, `select kind, hours, amount_kes, client_fee_kes, reason from extra_requests where job_id = $1 and status = 'APPROVED' order by created_at`, [j.id]);
+  const xs = await many<{ kind: string; hours: number | null; units: number | null; amount_kes: number; client_fee_kes: number; reason: string }>(
+    q,
+    `select kind, hours, units, amount_kes, client_fee_kes, reason from extra_requests where job_id = $1 and status = 'APPROVED' order by created_at`,
+    [j.id],
+  );
   const lines: { label: string; detail?: string; amount: number }[] = [
-    { label: j.service_name, detail: j.pricing === "hourly" ? `${j.hours} h × KES ${j.rate_kes.toLocaleString("en-KE")}` : "Fixed price", amount: j.base_kes },
-    ...xs.map((x) => ({ label: x.kind === "hours" ? `Extra time${x.hours ? ` (${x.hours} h)` : ""}` : "Materials", detail: x.reason, amount: x.amount_kes })),
+    ...priceLines(j),
+    ...xs.map((x) => ({
+      label: x.kind === "hours" ? `Extra time${x.hours ? ` (${Number(x.hours)} h)` : ""}` : x.kind === "units" ? `Extra ${unitWord(j.unit_label, 2)}${x.units ? ` (${Number(x.units)})` : ""}` : "Materials",
+      detail: x.reason,
+      amount: x.amount_kes,
+    })),
   ];
   const fee = j.client_fee_kes + xs.reduce((a, x) => a + x.client_fee_kes, 0);
   const work = j.base_kes + j.extras_kes;
@@ -104,7 +134,11 @@ function common(j: JobRow) {
     ref: j.ref,
     status: j.status,
     outcome: j.outcome,
-    service: { id: j.service_id, name: j.service_name, category: j.category_id, pricing: j.pricing, rate: j.rate_kes, hours: j.hours },
+    service: {
+      id: j.service_id, name: j.service_name, category: j.category_id, pricing: j.pricing, rate: j.rate_kes, hours: Number(j.hours), quantity: Number(j.quantity), unit: j.unit_label,
+      unitPhrase: unitPhrase(j), shiftHours: j.shift_hours != null ? Number(j.shift_hours) : null, overtimeHours: Number(j.overtime_hours), overtimeRate: j.overtime_rate_kes, zone: j.zone,
+    },
+    priceLines: priceLines(j),
     description: j.description,
     scheduledFor: j.scheduled_for,
     createdAt: j.created_at,
@@ -188,6 +222,8 @@ export async function jobForWorker(q: Q, j: JobRow, s: Settings) {
     theirRating,
     dispute: d,
     probation: j.probation,
+    // What the worker can ask for on site: extra time at this rate (null: they state the amount), or more units.
+    extraRates: { hourly: await hourlyRateFor(q, j), unit: j.pricing === "per_unit" ? j.rate_kes : null, unitLabel: j.unit_label },
   };
 }
 
@@ -198,7 +234,8 @@ export async function offerView(q: Q, o: { id: string; distance_km: number; expi
     offerId: o.id,
     jobId: j.id,
     ref: j.ref,
-    service: { name: j.service_name, category: j.category_id, pricing: j.pricing, hours: j.hours },
+    service: { name: j.service_name, category: j.category_id, pricing: j.pricing, hours: Number(j.hours), quantity: Number(j.quantity), unit: j.unit_label, overtimeHours: Number(j.overtime_hours), zone: j.zone },
+    summary: priceLines(j).map((l) => l.detail).join(" + "),
     area: areaOf(j.address),
     distanceKm: o.distance_km,
     earn: baseNet,

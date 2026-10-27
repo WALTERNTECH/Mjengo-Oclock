@@ -131,7 +131,7 @@ export default function Account() {
             </Link>{" "}
             ·{" "}
             <Link to="/legal/policies" className="link">
-              Fees and cancellations
+              Rates, fees and cancellations
             </Link>
           </div>
         </div>

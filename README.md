@@ -1,12 +1,12 @@
 # Mjengo O'clock
 
-On-demand construction trades in Nairobi: plumbers, electricians, site managers and general workers, booked from a phone with the price upfront, tracked live, and paid by M-Pesa only when the client approves the work. Built from *PRD v2 – On-Demand Construction Trades Service*.
+On-demand construction trades in Nairobi: general workers, plumbers, electricians, welders, fundis, site managers and foremen, booked from a phone with the price upfront, tracked live, and paid by M-Pesa only when the client approves the work. Built from *PRD v2 – On-Demand Construction Trades Service*.
 
 ## What's in it
 
 **Clients** (mobile web, installable as an app)
 - Sign in with a phone number and a code by SMS.
-- Choose a trade and a job with a fixed or hourly rate, pick the address by search, current location or a pin on the map, add directions, a date and time (or right away), a description and up to 3 photos, and see the price with the 9% fee before confirming.
+- Choose a trade and a job from the rate schedule (per task or visit, per hour, per 8-hour shift with optional overtime, or per foot), pick the address by search, current location or a pin on the map, add directions, a date and time (or right away), a description and up to 3 photos, and see the price with the 9% fee before confirming.
 - Pay the hold by M-Pesa; it stays in escrow until the job is approved.
 - Track the job: the worker's verified name, photo and rating, a call button, live location on the map (shown only while the job is active; "Location unavailable" after 2 minutes without an update), and the En route → On site → In progress → Done timeline.
 - Approve or decline extra hours and materials before they're done; approved extras are paid into escrow on the spot.
@@ -18,6 +18,24 @@ On-demand construction trades in Nairobi: plumbers, electricians, site managers 
 - Go available (location sharing with consent), get offers by SMS and in the app with the area, distance, pay and photos, and 2 minutes to accept.
 - Tap each status (start trip with an ETA, arrived, start, complete with photos); each tap texts the client. Request extras with a photo, log a client no-show after a 15-minute wait for the call-out fee, cancel, rate the client.
 - Earnings and payouts: 91% of every job price and tips in full.
+
+**Rate schedule** (Construction & Site Labor Rate Schedule), seeded in `backend/src/seed.ts` and editable in Admin › Trades and rates:
+
+| Section | Service | Rate |
+|---|---|---|
+| General labor | General worker, standard shift | KES 800 per 8-hour shift (overtime KES 100/h) |
+| | General worker, by the hour | KES 100 per hour |
+| | Heavy labor: clearing, loading and bagging | KES 200 per hour |
+| | Earthworks: digging and trenching | KES 60 per foot |
+| Skilled trades | Plumbing job | KES 2,000 per task |
+| | Electrician, by the hour | KES 250 per hour |
+| | Welding job | KES 2,000 per task |
+| | General fundi job | KES 1,600 per task |
+| Management | Site manager visit, Nairobi | KES 15,000 per visit |
+| | Site manager visit, outside Nairobi | KES 35,000 per visit |
+| | Foreman, standard shift | KES 2,000 per 8-hour shift |
+
+Billing rules: day shifts are capped at 8 hours and hours beyond that bill hourly where a rate exists; site visits are priced by zone (Nairobi area or out of station, checked against the site's location); plumber, welder and fundi work is a flat rate per task; contractor overhead and engineering review fees are outside the schedule. A new schedule is applied once per database (`catalog_version` in settings); earlier services are switched off, not deleted, because past jobs reference them.
 
 **Dispatch** offers each job to the nearest available, approved worker in the trade, 2 minutes each, then the next nearest, with no radius inside Nairobi. After 10 minutes with no acceptance the client is texted (reschedule or cancel free) and the team is alerted to dispatch by hand. Scheduled jobs start looking 2 hours ahead.
 
@@ -69,4 +87,4 @@ See `backend/.env.example`. Until these are set the app runs in test mode and sa
 - **M-Pesa**: `MPESA_DRIVER=daraja`, `MPESA_ENV=production` and the Daraja credentials; B2C credentials for automatic payouts and refunds. The callback URL is `PUBLIC_URL/api/mpesa/callback/<MPESA_CALLBACK_TOKEN>`; Daraja signs nothing, so a reported success is confirmed with a status query first. M-Pesa has no pre-authorisation, so the booking hold is a payment kept in escrow; PRD section 11 notes this may need a licensed payment partner.
 - **Maps**: `MAPBOX_TOKEN` and `MAPBOX_PUBLIC_TOKEN` for traffic-aware ETAs, Mapbox search and tiles. The free OpenStreetMap tile servers are fine for testing but not for production traffic.
 - **ID checks**: every application currently goes to the admin queue with the ID photo and selfie side by side. Smile ID (or Didit) plugs into `backend/src/services/idcheck.ts` once there is a contract and sandbox keys.
-- **Rates and policy**: the starting rates in `backend/src/seed.ts` and the fee amounts are placeholders from the PRD; set the real ones in the admin console. Have counsel review the terms and privacy notice (`frontend/src/pages/Legal.tsx`), including worker status, VAT and insurance, and register with the Data Protection Commissioner.
+- **Rates and policy**: rates follow the rate schedule above; the cancellation and call-out fee amounts are still the PRD's placeholders, so set the real ones in Admin › Fees and policies. Have counsel review the terms and privacy notice (`frontend/src/pages/Legal.tsx`), including worker status, VAT and insurance, and register with the Data Protection Commissioner.

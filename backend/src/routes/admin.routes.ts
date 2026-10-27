@@ -519,29 +519,58 @@ adminRouter.get("/catalog", any, async (_req, res) => {
 
 adminRouter.put("/categories/:id", ops, async (req, res) => {
   const id = String(req.params.id);
-  const b = z.object({ name: z.string().trim().min(2).max(60), trade: z.string().trim().min(2).max(40), blurb: z.string().trim().max(200), requiresCertificate: z.boolean(), active: z.boolean() }).parse(req.body);
-  const r = await one(db(), `update categories set name = $2, trade = $3, blurb = $4, requires_certificate = $5, active = $6 where id = $1 returning id`, [id, b.name, b.trade, b.blurb, b.requiresCertificate, b.active]);
+  const b = z
+    .object({
+      name: z.string().trim().min(2).max(60),
+      trade: z.string().trim().min(2).max(40),
+      blurb: z.string().trim().max(200),
+      section: z.string().trim().max(80).default(""),
+      requiresCertificate: z.boolean(),
+      active: z.boolean(),
+    })
+    .parse(req.body);
+  const r = await one(db(), `update categories set name = $2, trade = $3, blurb = $4, section = $5, requires_certificate = $6, active = $7 where id = $1 returning id`, [
+    id, b.name, b.trade, b.blurb, b.section, b.requiresCertificate, b.active,
+  ]);
   if (!r) throw notFound("Category not found");
   await audit(req, "category.update", "category", id, b);
   res.json({ categories: await catalog(true) });
 });
 
-const ServiceBody = z.object({
-  categoryId: z.string().min(1),
-  name: z.string().trim().min(3).max(80),
-  description: z.string().trim().max(300).default(""),
-  pricing: z.enum(["flat", "hourly"]),
-  rate: z.number().int().min(50).max(1_000_000),
-  minHours: z.number().min(0.5).max(24).default(1),
-  active: z.boolean().default(true),
-  sort: z.number().int().min(0).max(999).default(50),
-});
+const ServiceBody = z
+  .object({
+    categoryId: z.string().min(1),
+    name: z.string().trim().min(3).max(80),
+    description: z.string().trim().max(300).default(""),
+    pricing: z.enum(["flat", "hourly", "shift", "per_unit"]),
+    rate: z.number().int().min(10).max(1_000_000),
+    /** What one rate buys: "task" or "visit" (flat), "ft" (per unit). Hour and shift are implied. */
+    unit: z.string().trim().max(20).default(""),
+    /** Least that can be booked: hours (hourly) or units (per_unit). */
+    minQty: z.number().min(0.5).max(10_000).default(1),
+    shiftHours: z.number().min(1).max(24).default(8),
+    overtimeRate: z.number().int().min(10).max(100_000).nullable().default(null),
+    zone: z.enum(["nairobi", "outside"]).default("nairobi"),
+    active: z.boolean().default(true),
+    sort: z.number().int().min(0).max(999).default(50),
+  })
+  .transform((b) => ({
+    ...b,
+    unit: b.pricing === "hourly" ? "hour" : b.pricing === "shift" ? "shift" : b.unit || (b.pricing === "per_unit" ? "unit" : "task"),
+    minQty: b.pricing === "hourly" || b.pricing === "per_unit" ? b.minQty : 1,
+    overtimeRate: b.pricing === "shift" ? b.overtimeRate : null,
+  }));
+
+const serviceParams = (b: z.infer<typeof ServiceBody>) => [b.categoryId, b.name, b.description, b.pricing, b.rate, b.unit, b.minQty, b.shiftHours, b.overtimeRate, b.zone, b.active, b.sort];
 
 adminRouter.post("/services", ops, async (req, res) => {
   const b = ServiceBody.parse(req.body);
-  const r = await one<{ id: string }>(db(), `insert into services (category_id, name, description, pricing, rate_kes, min_hours, active, sort) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`, [
-    b.categoryId, b.name, b.description, b.pricing, b.rate, b.pricing === "hourly" ? b.minHours : 1, b.active, b.sort,
-  ]);
+  const r = await one<{ id: string }>(
+    db(),
+    `insert into services (category_id, name, description, pricing, rate_kes, unit_label, min_hours, shift_hours, overtime_rate_kes, zone, active, sort)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
+    serviceParams(b),
+  );
   await audit(req, "service.create", "service", r!.id, b);
   res.status(201).json({ categories: await catalog(true) });
 });
@@ -550,9 +579,12 @@ adminRouter.put("/services/:id", ops, async (req, res) => {
   const id = uuidParam(req.params.id);
   const b = ServiceBody.parse(req.body);
   // Rates are copied onto each job when it's booked, so a change never alters an existing booking.
-  const r = await one(db(), `update services set category_id = $2, name = $3, description = $4, pricing = $5, rate_kes = $6, min_hours = $7, active = $8, sort = $9, updated_at = now() where id = $1 returning id`, [
-    id, b.categoryId, b.name, b.description, b.pricing, b.rate, b.pricing === "hourly" ? b.minHours : 1, b.active, b.sort,
-  ]);
+  const r = await one(
+    db(),
+    `update services set category_id = $2, name = $3, description = $4, pricing = $5, rate_kes = $6, unit_label = $7, min_hours = $8, shift_hours = $9,
+            overtime_rate_kes = $10, zone = $11, active = $12, sort = $13, updated_at = now() where id = $1 returning id`,
+    [id, ...serviceParams(b)],
+  );
   if (!r) throw notFound("Service not found");
   await audit(req, "service.update", "service", id, b);
   res.json({ categories: await catalog(true) });

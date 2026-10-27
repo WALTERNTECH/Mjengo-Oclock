@@ -42,6 +42,8 @@ jobsRouter.get("/", async (req, res) => {
 const NewJob = z.object({
   serviceId: z.uuid(),
   hours: z.coerce.number().positive().max(24).optional(),
+  quantity: z.coerce.number().positive().max(100_000).optional(),
+  overtimeHours: z.coerce.number().min(0).max(16).optional(),
   address: z.string().trim().min(3, "Choose the job address").max(240),
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),

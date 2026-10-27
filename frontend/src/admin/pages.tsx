@@ -1108,23 +1108,65 @@ export function Payouts() {
 
 // ——— Rates ———
 
-type Svc = { id: string; name: string; description: string; pricing: "flat" | "hourly"; rate: number; minHours: number; active: boolean };
-type Cat = { id: string; name: string; trade: string; blurb: string; requiresCertificate: boolean; active: boolean; services: Svc[] };
+type Pricing = "flat" | "hourly" | "shift" | "per_unit";
+type Svc = {
+  id: string;
+  name: string;
+  description: string;
+  pricing: Pricing;
+  rate: number;
+  unit: string;
+  unitPhrase: string;
+  minQty: number;
+  shiftHours: number;
+  overtimeRate: number | null;
+  zone: "nairobi" | "outside";
+  active: boolean;
+  sort: number;
+};
+type Cat = { id: string; name: string; trade: string; blurb: string; section: string; requiresCertificate: boolean; active: boolean; services: Svc[] };
+
+const PRICING: [Pricing, string][] = [
+  ["flat", "Per task or visit"],
+  ["hourly", "Per hour"],
+  ["shift", "Per shift"],
+  ["per_unit", "Per unit (e.g. foot)"],
+];
 
 export function Rates() {
   const { data, setData } = useAdmin<{ categories: Cat[] }>("/catalog");
   const { busy, run } = useRun();
   if (!data) return <Loading />;
   const saveSvc = (catId: string, s: Partial<Svc> & { id?: string }) =>
-    run(`svc-${s.id ?? catId}`, async () => {
-      const body = { categoryId: catId, name: s.name, description: s.description ?? "", pricing: s.pricing, rate: Number(s.rate), minHours: Number(s.minHours ?? 1), active: s.active ?? true };
-      const r = s.id ? await adminApi.put(`/services/${s.id}`, body) : await adminApi.post("/services", body);
-      setData(r.data);
-    }, "Saved. New bookings use the new rate.");
+    run(
+      `svc-${s.id ?? catId}`,
+      async () => {
+        const body = {
+          categoryId: catId,
+          name: s.name,
+          description: s.description ?? "",
+          pricing: s.pricing,
+          rate: Number(s.rate),
+          unit: s.unit ?? "",
+          minQty: Number(s.minQty ?? 1),
+          shiftHours: Number(s.shiftHours ?? 8),
+          overtimeRate: s.overtimeRate ? Number(s.overtimeRate) : null,
+          zone: s.zone ?? "nairobi",
+          active: s.active ?? true,
+          sort: s.sort ?? 50,
+        };
+        const r = s.id ? await adminApi.put(`/services/${s.id}`, body) : await adminApi.post("/services", body);
+        setData(r.data);
+      },
+      "Saved. New bookings use the new rate.",
+    );
   return (
     <div className="stack g-20">
       <Head title="Trades and rates" />
-      <Notice>Rates are copied onto each job when it's booked, so changes apply to new bookings only.</Notice>
+      <Notice>
+        Rates follow the construction and site labour rate schedule. They're copied onto each job when it's booked, so changes apply to new bookings only. Shifts are 8 hours; hours beyond a shift bill at its overtime rate where one is set. Site visits
+        can have a Nairobi and an out-of-station rate. Contractor overhead and engineering review fees aren't part of the schedule.
+      </Notice>
       {data.categories.map((c) => (
         <CategoryCard
           key={c.id}
@@ -1139,16 +1181,21 @@ export function Rates() {
 }
 
 function CategoryCard({ cat, busy, onSaveCat, onSaveSvc }: { cat: Cat; busy: string; onSaveCat: (b: Omit<Cat, "id" | "services">) => Promise<boolean>; onSaveSvc: (s: Partial<Svc>) => Promise<boolean> }) {
-  const [c, setC] = useState({ name: cat.name, trade: cat.trade, blurb: cat.blurb, requiresCertificate: cat.requiresCertificate, active: cat.active });
+  const [c, setC] = useState({ name: cat.name, trade: cat.trade, blurb: cat.blurb, section: cat.section, requiresCertificate: cat.requiresCertificate, active: cat.active });
   const [adding, setAdding] = useState(false);
+  const live = cat.services.filter((s) => s.active);
+  const off = cat.services.filter((s) => !s.active);
   return (
     <div className="card stack g-14">
       <div className="row g-10 wrap">
         <div style={{ width: 200 }}>
-          <Input label="Category" value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />
+          <Input label="Trade" value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />
         </div>
         <div style={{ width: 160 }}>
-          <Input label="Trade (in SMS)" value={c.trade} onChange={(e) => setC({ ...c, trade: e.target.value })} />
+          <Input label="Worker title (in SMS)" value={c.trade} onChange={(e) => setC({ ...c, trade: e.target.value })} />
+        </div>
+        <div style={{ width: 240 }}>
+          <Input label="Section on the home page" value={c.section} onChange={(e) => setC({ ...c, section: e.target.value })} />
         </div>
         <div className="grow" style={{ minWidth: 220 }}>
           <Input label="Short description" value={c.blurb} onChange={(e) => setC({ ...c, blurb: e.target.value })} />
@@ -1162,19 +1209,35 @@ function CategoryCard({ cat, busy, onSaveCat, onSaveSvc }: { cat: Cat; busy: str
           <input type="checkbox" checked={c.active} onChange={(e) => setC({ ...c, active: e.target.checked })} /> Bookable
         </label>
         <Button size="sm" loading={busy === `cat-${cat.id}`} onClick={() => void onSaveCat(c)}>
-          Save category
+          Save trade
         </Button>
       </div>
       <div className="stack g-8">
-        {cat.services.map((s) => (
+        {live.map((s) => (
           <ServiceRow key={s.id} svc={s} busy={busy === `svc-${s.id}`} onSave={onSaveSvc} />
         ))}
         {adding ? (
-          <ServiceRow svc={{ name: "", description: "", pricing: "flat", rate: 1000, minHours: 1, active: true }} busy={busy === `svc-${cat.id}`} onSave={async (s) => (await onSaveSvc(s)) && (setAdding(false), true)} />
+          <ServiceRow
+            svc={{ name: "", description: "", pricing: "flat", rate: 1000, unit: "task", minQty: 1, shiftHours: 8, overtimeRate: null, zone: "nairobi", active: true, sort: live.length + 1 }}
+            busy={busy === `svc-${cat.id}`}
+            onSave={async (s) => (await onSaveSvc(s)) && (setAdding(false), true)}
+          />
         ) : (
           <Button size="sm" variant="ghost" onClick={() => setAdding(true)} style={{ alignSelf: "flex-start" }}>
             + Add a service
           </Button>
+        )}
+        {off.length > 0 && (
+          <details>
+            <summary className="small muted" style={{ cursor: "pointer" }}>
+              Switched off ({off.length}): kept for past jobs
+            </summary>
+            <div className="stack g-8 mt-8">
+              {off.map((s) => (
+                <ServiceRow key={s.id} svc={s} busy={busy === `svc-${s.id}`} onSave={onSaveSvc} />
+              ))}
+            </div>
+          </details>
         )}
       </div>
     </div>
@@ -1183,26 +1246,51 @@ function CategoryCard({ cat, busy, onSaveCat, onSaveSvc }: { cat: Cat; busy: str
 
 function ServiceRow({ svc, busy, onSave }: { svc: Partial<Svc>; busy: boolean; onSave: (s: Partial<Svc>) => Promise<boolean> }) {
   const [s, setS] = useState(svc);
+  const num = (v: string) => Number(v.replace(/[^\d.]/g, ""));
   return (
     <div className="row g-8 wrap" style={{ alignItems: "flex-end", paddingTop: 8, borderTop: "1px solid var(--line)" }}>
-      <div className="grow" style={{ minWidth: 200 }}>
+      <div className="grow" style={{ minWidth: 220 }}>
         <Input label="Service" value={s.name ?? ""} onChange={(e) => setS({ ...s, name: e.target.value })} />
       </div>
-      <div style={{ width: 120 }}>
-        <Select label="Pricing" value={s.pricing} onChange={(e) => setS({ ...s, pricing: e.target.value as "flat" | "hourly" })}>
-          <option value="flat">Fixed</option>
-          <option value="hourly">Hourly</option>
+      <div style={{ width: 160 }}>
+        <Select label="Billed" value={s.pricing} onChange={(e) => setS({ ...s, pricing: e.target.value as Pricing })}>
+          {PRICING.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
         </Select>
       </div>
       <div style={{ width: 110 }}>
-        <Input label="Rate (KES)" inputMode="numeric" value={String(s.rate ?? "")} onChange={(e) => setS({ ...s, rate: Number(e.target.value.replace(/\D/g, "")) })} />
+        <Input label="Rate (KES)" inputMode="numeric" value={String(s.rate ?? "")} onChange={(e) => setS({ ...s, rate: num(e.target.value) })} />
       </div>
-      {s.pricing === "hourly" && (
-        <div style={{ width: 90 }}>
-          <Input label="Min hours" inputMode="decimal" value={String(s.minHours ?? 1)} onChange={(e) => setS({ ...s, minHours: Number(e.target.value.replace(/[^\d.]/g, "")) || 1 })} />
+      {(s.pricing === "flat" || s.pricing === "per_unit") && (
+        <div style={{ width: 100 }}>
+          <Input label="Per" placeholder={s.pricing === "flat" ? "task" : "ft"} value={s.unit ?? ""} onChange={(e) => setS({ ...s, unit: e.target.value.trim().slice(0, 20) })} />
         </div>
       )}
-      <div className="grow" style={{ minWidth: 220 }}>
+      {(s.pricing === "hourly" || s.pricing === "per_unit") && (
+        <div style={{ width: 100 }}>
+          <Input label={s.pricing === "hourly" ? "Min hours" : "Min units"} inputMode="decimal" value={String(s.minQty ?? 1)} onChange={(e) => setS({ ...s, minQty: num(e.target.value) || 1 })} />
+        </div>
+      )}
+      {s.pricing === "shift" && (
+        <>
+          <div style={{ width: 100 }}>
+            <Input label="Shift hours" inputMode="decimal" value={String(s.shiftHours ?? 8)} onChange={(e) => setS({ ...s, shiftHours: num(e.target.value) || 8 })} />
+          </div>
+          <div style={{ width: 130 }}>
+            <Input label="Overtime per hour" inputMode="numeric" placeholder="None" value={s.overtimeRate ? String(s.overtimeRate) : ""} onChange={(e) => setS({ ...s, overtimeRate: num(e.target.value) || null })} />
+          </div>
+        </>
+      )}
+      <div style={{ width: 150 }}>
+        <Select label="Where" value={s.zone ?? "nairobi"} onChange={(e) => setS({ ...s, zone: e.target.value as "nairobi" | "outside" })}>
+          <option value="nairobi">Nairobi area</option>
+          <option value="outside">Outside Nairobi</option>
+        </Select>
+      </div>
+      <div className="grow" style={{ minWidth: 240 }}>
         <Input label="Description" value={s.description ?? ""} onChange={(e) => setS({ ...s, description: e.target.value })} />
       </div>
       <label className="check" style={{ marginBottom: 12 }}>

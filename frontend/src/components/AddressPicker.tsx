@@ -10,7 +10,20 @@ import { Button, Notice } from "./ui";
 
 export type PickedAddress = { label: string; lat: number; lng: number };
 
-export function AddressPicker({ value, onChange, error, showMap = true }: { value: PickedAddress | null; onChange: (a: PickedAddress) => void; error?: string; showMap?: boolean }) {
+export function AddressPicker({
+  value,
+  onChange,
+  error,
+  showMap = true,
+  scope = "nairobi",
+}: {
+  value: PickedAddress | null;
+  onChange: (a: PickedAddress) => void;
+  error?: string;
+  showMap?: boolean;
+  /** "kenya" for trades with out-of-station rates (site visits outside the Nairobi area). */
+  scope?: "nairobi" | "kenya";
+}) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Place[]>([]);
   const [busy, setBusy] = useState(false);
@@ -28,7 +41,7 @@ export function AddressPicker({ value, onChange, error, showMap = true }: { valu
     const t = setTimeout(async () => {
       setBusy(true);
       try {
-        const r = await api.get<{ places: Place[]; unavailable?: boolean }>("/geo/search", { params: { q: text, ...(value ? { lat: value.lat, lng: value.lng } : {}) } });
+        const r = await api.get<{ places: Place[]; unavailable?: boolean }>("/geo/search", { params: { q: text, scope, ...(value ? { lat: value.lat, lng: value.lng } : {}) } });
         if (n === seq.current) {
           setResults(r.data.places);
           setMsg(r.data.unavailable ? "Address search isn't responding. Move the pin on the map instead." : r.data.places.length ? null : "No matches. Try a road, estate or building name.");
@@ -116,7 +129,9 @@ export function AddressPicker({ value, onChange, error, showMap = true }: { valu
           )}
         </div>
       )}
-      {!value && !results.length && !msg && <Notice>We cover Nairobi and the surrounding estates.</Notice>}
+      {!value && !results.length && !msg && (
+        <Notice>{scope === "kenya" ? "Site visits are priced by location: within the Nairobi area, or out of station anywhere in Kenya." : "We cover Nairobi and the surrounding estates."}</Notice>
+      )}
     </div>
   );
 }

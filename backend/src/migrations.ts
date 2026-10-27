@@ -430,4 +430,34 @@ create index perf_samples_at on perf_samples (created_at desc);
 alter table perf_samples enable row level security;
 `,
   },
+  {
+    // The construction and site labour rate schedule: fixed 8-hour shifts with hourly overtime,
+    // per-foot earthworks, and site visits priced by zone (Nairobi or out of station).
+    id: "003_rate_schedule",
+    sql: `
+alter table categories add column section text not null default '';
+
+alter table services drop constraint services_pricing_check;
+alter table services add constraint services_pricing_check check (pricing in ('flat','hourly','shift','per_unit'));
+-- What one rate buys: 'task', 'visit', 'shift', 'hour' or 'ft'.
+alter table services add column unit_label text not null default '';
+alter table services add column shift_hours numeric not null default 8 check (shift_hours > 0);
+-- Hours beyond a shift are billed at this rate; null where the schedule gives none.
+alter table services add column overtime_rate_kes int check (overtime_rate_kes > 0);
+alter table services add column zone text not null default 'nairobi' check (zone in ('nairobi','outside'));
+
+alter table jobs drop constraint jobs_pricing_check;
+alter table jobs add constraint jobs_pricing_check check (pricing in ('flat','hourly','shift','per_unit'));
+alter table jobs add column unit_label text not null default '';
+alter table jobs add column quantity numeric not null default 1;
+alter table jobs add column shift_hours numeric;
+alter table jobs add column overtime_hours numeric not null default 0;
+alter table jobs add column overtime_rate_kes int;
+alter table jobs add column zone text not null default 'nairobi';
+
+alter table extra_requests drop constraint extra_requests_kind_check;
+alter table extra_requests add constraint extra_requests_kind_check check (kind in ('hours','materials','units'));
+alter table extra_requests add column units numeric;
+`,
+  },
 ];

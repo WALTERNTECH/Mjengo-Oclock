@@ -21,15 +21,22 @@ export function haversineKm(a: Point, b: Point): number {
 export const haversineSql = (latA: string, lngA: string, latB: string, lngB: string) =>
   `(6371 * 2 * asin(least(1, sqrt(power(sin(radians((${latB}) - (${latA})) / 2), 2) + cos(radians(${latA})) * cos(radians(${latB})) * power(sin(radians((${lngB}) - (${lngA})) / 2), 2)))))`;
 
+/** Within the Nairobi area: the launch zone, and the "Nairobi" rate for zoned services. */
 export const inServiceArea = (p: Point, radiusKm: number) => haversineKm(NAIROBI, p) <= radiusKm;
 
+/** Roughly Kenya's bounding box, for out-of-station site visits. */
+export const inKenya = (p: Point) => p.lat >= -4.9 && p.lat <= 5.2 && p.lng >= 33.8 && p.lng <= 42.0;
+const KENYA_BBOX = "33.8,-4.9,42.0,5.2";
+
 /**
- * Minutes to drive from a to b. Without Mapbox: roads run about 1.4× the straight line and
- * Nairobi traffic averages around 20 km/h, plus a few minutes to get going.
+ * Minutes to drive from a to b. Without Mapbox: roads run about 1.4× the straight line,
+ * Nairobi traffic averages around 20 km/h over the first 15 km, open road about 60 km/h
+ * after that, plus a few minutes to get going.
  */
 export function estimateMinutes(a: Point, b: Point): number {
   const km = haversineKm(a, b) * 1.4;
-  return Math.max(5, Math.round(3 + (km / 20) * 60));
+  const city = Math.min(km, 15);
+  return Math.max(5, Math.round(3 + (city / 20) * 60 + ((km - city) / 60) * 60));
 }
 
 export async function etaMinutes(a: Point, b: Point): Promise<{ minutes: number; source: "mapbox" | "estimate" }> {
@@ -60,9 +67,9 @@ function remember(key: string, places: Place[]) {
   return places;
 }
 
-/** Address suggestions near Nairobi as the person types. */
-export async function searchPlaces(q: string, near: Point = NAIROBI): Promise<Place[]> {
-  const key = `s:${q.toLowerCase()}:${near.lat.toFixed(2)},${near.lng.toFixed(2)}`;
+/** Address suggestions as the person types: around Nairobi, or anywhere in Kenya for out-of-station visits. */
+export async function searchPlaces(q: string, near: Point = NAIROBI, scope: "nairobi" | "kenya" = "nairobi"): Promise<Place[]> {
+  const key = `s:${scope}:${q.toLowerCase()}:${near.lat.toFixed(2)},${near.lng.toFixed(2)}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < 10 * 60_000) return hit.places;
   if (env.maps.mapboxToken) {
@@ -76,8 +83,8 @@ export async function searchPlaces(q: string, near: Point = NAIROBI): Promise<Pl
     );
   }
   const u = new URL("https://photon.komoot.io/api/");
-  // Biased to Nairobi and kept inside the wider metro area.
-  u.search = new URLSearchParams({ q, lat: String(near.lat), lon: String(near.lng), limit: "8", lang: "en", bbox: "36.55,-1.55,37.20,-1.00" }).toString();
+  // Biased to Nairobi, and kept inside the wider metro area unless the search is Kenya-wide.
+  u.search = new URLSearchParams({ q, lat: String(near.lat), lon: String(near.lng), limit: "8", lang: "en", bbox: scope === "kenya" ? KENYA_BBOX : "36.55,-1.55,37.20,-1.00" }).toString();
   const r = await fetch(u, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(6_000) });
   const j = (await r.json()) as { features?: PhotonFeature[] };
   return remember(key, dedupe((j.features ?? []).map(photonPlace)).slice(0, 6));

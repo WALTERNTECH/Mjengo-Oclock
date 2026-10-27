@@ -7,14 +7,35 @@ import { PaymentSheet } from "../components/PaymentSheet";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { Button, CategoryIcon, Field, Input, Notice, PageHead, Segmented, Select, Sheet, Skeleton, Stepper, Textarea } from "../components/ui";
 import { useAuth, useConfig } from "../context/AuthContext";
-import { kes, newKey } from "../lib/format";
+import { estimate, kes, newKey, ratePhrase, unitWord } from "../lib/format";
 import { saveWhere, useWhere } from "../lib/where";
 import type { Category, ClientJob, Me, Started } from "../types";
 
 // View 2: job details, date and time, photos, and a sticky footer with the live price
-// breakdown and Confirm and book (US-01). Payment is the M-Pesa hold.
+// breakdown and Confirm and book (US-01). Payment is the M-Pesa hold. Rates follow the
+// construction and site labour rate schedule: per task or visit, per hour, per 8-hour shift
+// (hours beyond it billed hourly where a rate exists), or per foot.
 
-type Draft = { serviceId: string | null; hours: number; notes: string; description: string; when: "asap" | "later"; date: string; time: string; key: string };
+type Draft = {
+  serviceId: string | null;
+  hours: number;
+  /** Feet of trench and the like, as typed. */
+  quantity: string;
+  overtimeHours: number;
+  notes: string;
+  description: string;
+  when: "asap" | "later";
+  date: string;
+  time: string;
+  key: string;
+};
+
+/** Straight-line km, enough to tell the Nairobi area from out of station. */
+function kmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = (d: number) => (d * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
 
 // Kept across the sign-in step (same tab, no reload), photos included.
 let draftStore: { category: string; draft: Draft; photos: File[] } | null = null;
@@ -41,8 +62,20 @@ export default function Book() {
 
   const restored = draftStore?.category === category ? draftStore : null;
   const [draft, setDraft] = useState<Draft>(
-    restored?.draft ?? { serviceId: new URLSearchParams(location.search).get("service"), hours: 0, notes: "", description: "", when: "asap", date: addDays(eatToday(), 1), time: "09:00", key: newKey() },
+    restored?.draft ?? {
+      serviceId: new URLSearchParams(location.search).get("service"),
+      hours: 0,
+      quantity: "",
+      overtimeHours: 0,
+      notes: "",
+      description: "",
+      when: "asap",
+      date: addDays(eatToday(), 1),
+      time: "09:00",
+      key: newKey(),
+    },
   );
+  const [zoneNote, setZoneNote] = useState<string | null>(null);
   const [photos, setPhotos] = useState<File[]>(restored?.photos ?? []);
   const [address, setAddress] = useState<PickedAddress | null>(where);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -60,17 +93,41 @@ export default function Book() {
     if (cat && !svc && cat.services.length) setDraft((d) => ({ ...d, serviceId: cat.services[0].id }));
   }, [cat]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (svc?.pricing === "hourly" && draft.hours < svc.minHours) setDraft((d) => ({ ...d, hours: svc.minHours }));
+    if (svc?.pricing === "hourly" && draft.hours < svc.minQty) setDraft((d) => ({ ...d, hours: svc.minQty }));
+    if (svc && !svc.overtimeRate && draft.overtimeHours) setDraft((d) => ({ ...d, overtimeHours: 0 }));
   }, [svc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Zoning: a site visit is priced by whether the site is in the Nairobi area or out of station,
+  // so the matching rate is picked as soon as the address is known.
+  const radius = cfg?.policy.serviceRadiusKm ?? 40;
+  const inNairobi = address && cfg ? kmBetween(address, cfg.centre) <= radius : null;
+  const zoned = Boolean(cat?.services.some((s) => s.zone === "outside"));
+  useEffect(() => {
+    if (!svc || !cat || inNairobi == null) return;
+    const want = inNairobi ? "nairobi" : "outside";
+    if (svc.zone === want) return;
+    const twin = cat.services.find((s) => s.zone === want && s.pricing === svc.pricing && s.unit === svc.unit);
+    if (twin) {
+      setDraft((d) => ({ ...d, serviceId: twin.id }));
+      setZoneNote(inNairobi ? `This site is in the Nairobi area, so the Nairobi rate applies (${ratePhrase(twin)}).` : `This site is outside the Nairobi area, so the out-of-station rate applies (${ratePhrase(twin)}).`);
+    }
+  }, [inNairobi, svc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zoneProblem =
+    svc && inNairobi != null && (svc.zone === "outside" ? inNairobi : !inNairobi)
+      ? svc.zone === "outside"
+        ? "This site is in the Nairobi area. Choose the Nairobi visit rate."
+        : zoned
+          ? "This site is outside the Nairobi area. Choose the out-of-station rate."
+          : "We only cover the Nairobi area for this trade. Choose an address in Nairobi."
+      : null;
+
+  const qty = Number(draft.quantity) || 0;
   const price = useMemo(() => {
     if (!svc) return null;
-    const hours = svc.pricing === "hourly" ? Math.max(draft.hours, svc.minHours) : 1;
-    const base = svc.pricing === "hourly" ? Math.round(svc.rate * hours) : svc.rate;
+    const hours = Math.max(draft.hours, svc.minQty);
     const pct = cfg?.fees.clientPct ?? 9;
-    const fee = Math.round((base * pct) / 100);
-    return { hours, base, fee, pct, total: base + fee };
-  }, [svc, draft.hours, cfg]);
+    return { hours, pct, ...estimate(svc, { hours, quantity: Math.max(qty, svc.pricing === "per_unit" ? 0 : 1), overtimeHours: draft.overtimeHours }, pct) };
+  }, [svc, draft.hours, qty, draft.overtimeHours, cfg]);
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const scheduledFor = draft.when === "later" ? `${draft.date}T${draft.time}:00+03:00` : null;
@@ -78,6 +135,8 @@ export default function Book() {
   const validate = () => {
     const e: Record<string, string> = {};
     if (!address) e.address = "Choose where the job is";
+    else if (zoneProblem) e.address = zoneProblem;
+    if (svc?.pricing === "per_unit" && (!qty || qty < svc.minQty)) e.quantity = `Enter how many ${unitWord(svc.unit, 2)} (at least ${svc.minQty})`;
     if (draft.description.trim().length < 10) e.description = "Describe the job in a sentence or two";
     if (draft.when === "later" && Date.parse(scheduledFor!) < Date.now() + 30 * 60_000) e.when = "Pick a time at least 30 minutes from now";
     setErrors(e);
@@ -101,6 +160,8 @@ export default function Book() {
         const r = await api.post<{ job: ClientJob }>("/jobs", {
           serviceId: svc.id,
           hours: svc.pricing === "hourly" ? price!.hours : undefined,
+          quantity: svc.pricing === "per_unit" ? qty : undefined,
+          overtimeHours: svc.pricing === "shift" && svc.overtimeRate ? draft.overtimeHours : undefined,
           address: address!.label,
           lat: address!.lat,
           lng: address!.lng,
@@ -160,27 +221,49 @@ export default function Book() {
             </span>
             <span className="stack" style={{ alignItems: "flex-end" }}>
               <span className="price">{kes(s.rate)}</span>
-              <span className="per">{s.pricing === "hourly" ? `per hour · min ${s.minHours} h` : "fixed"}</span>
+              <span className="per">{s.unitPhrase}</span>
             </span>
           </button>
         ))}
         {svc?.pricing === "hourly" && (
           <Field label="How many hours?" hint="Extra time needs your approval in the app before it's charged.">
-            <Stepper value={Math.max(draft.hours, svc.minHours)} onChange={(v) => set("hours", v)} min={svc.minHours} max={24} step={svc.minHours % 1 ? 0.5 : 1} format={(v) => `${v} h`} />
+            <Stepper value={Math.max(draft.hours, svc.minQty)} onChange={(v) => set("hours", v)} min={svc.minQty} max={24} step={svc.minQty % 1 ? 0.5 : 1} format={(v) => `${v} h`} />
           </Field>
         )}
+        {svc?.pricing === "per_unit" && (
+          <Input
+            label={`How many ${unitWord(svc.unit, 2)}?`}
+            inputMode="numeric"
+            placeholder={`e.g. 50`}
+            value={draft.quantity}
+            onChange={(e) => set("quantity", e.target.value.replace(/[^\d.]/g, "").slice(0, 7))}
+            error={errors.quantity}
+            hint={`${ratePhrase(svc)}. If more turns out to be needed, the worker asks you in the app first.`}
+          />
+        )}
+        {svc?.pricing === "shift" &&
+          (svc.overtimeRate ? (
+            <Field label={`Hours beyond the ${svc.shiftHours}-hour shift`} hint={`A standard shift is ${svc.shiftHours} hours. Extra hours are billed at ${kes(svc.overtimeRate)} per hour.`}>
+              <Stepper value={draft.overtimeHours} onChange={(v) => set("overtimeHours", v)} min={0} max={8} format={(v) => (v ? `+${v} h` : "None")} />
+            </Field>
+          ) : (
+            <p className="small muted">A standard {svc.shiftHours}-hour shift. For longer work, book another shift.</p>
+          ))}
       </section>
 
       <section className="stack g-10" aria-label="Location">
         <div className="section-title">Where</div>
         <AddressPicker
           value={address}
+          scope={zoned ? "kenya" : "nairobi"}
           onChange={(a) => {
             setAddress(a);
+            setZoneNote(null);
             saveWhere(a);
           }}
-          error={errors.address}
+          error={errors.address ?? zoneProblem ?? undefined}
         />
+        {zoneNote && !zoneProblem && <Notice tone="ok">{zoneNote}</Notice>}
         <Input label="Directions for the worker" placeholder="Gate colour, building, floor, house number" value={draft.notes} onChange={(e) => set("notes", e.target.value)} maxLength={300} />
       </section>
 
@@ -228,7 +311,8 @@ export default function Book() {
       </section>
 
       <Notice>
-        Cancel free until a worker accepts. After that, fees may apply; the cancel screen always shows the amount first. <Link to="/legal/policies" className="link">Fees and cancellations</Link>
+        Cancel free until a worker accepts. After that, fees may apply; the cancel screen always shows the amount first. Rates follow our standard schedule; contractor overhead and specialised engineering review fees aren't included and are quoted under a separate scope contract.{" "}
+        <Link to="/legal/policies" className="link">Rates, fees and cancellations</Link>
       </Notice>
       {error && <Notice tone="error">{error}</Notice>}
 
@@ -238,7 +322,8 @@ export default function Book() {
             <div className="price-line">
               <div className="stack">
                 <span className="price-detail">
-                  {svc!.pricing === "hourly" ? `${price.hours} h × ${kes(svc!.rate)}` : svc!.name} = {kes(price.base)} · {price.pct}% fee {kes(price.fee)}
+                  {price.detail}
+                  {svc!.pricing === "hourly" || svc!.pricing === "per_unit" || price.overtimeHours > 0 ? ` = ${kes(price.base)}` : ""} · {price.pct}% fee {kes(price.fee)}
                 </span>
                 <span className="price-detail">Held by M-Pesa until you approve the work</span>
               </div>
@@ -274,10 +359,15 @@ export default function Book() {
           amount={job.price.total}
           summary={
             <div className="stack g-4 small">
-              <div className="kv">
-                <span>{job.service.name}</span>
-                <span className="num">{kes(job.price.base)}</span>
-              </div>
+              {job.priceLines.map((l) => (
+                <div className="kv" key={l.label}>
+                  <span>
+                    {l.label}
+                    {l.detail && <span className="tiny muted"> · {l.detail}</span>}
+                  </span>
+                  <span className="num">{kes(l.amount)}</span>
+                </div>
+              ))}
               <div className="kv">
                 <span>Service fee ({job.price.clientFeePct}%)</span>
                 <span className="num">{kes(job.price.clientFee)}</span>

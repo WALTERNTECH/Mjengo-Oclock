@@ -86,7 +86,7 @@ function SignIn({ onDone }: { onDone: (token: string) => void }) {
           <span className="badge ink">Admin</span>
         </div>
         <div className="stack g-8">
-          <h1 style={{ fontSize: 24 }}>{stage === "code" ? (enrol ? "Set up your authenticator" : "Authenticator code") : firstRun ? "Create the owner account" : "Admin sign-in"}</h1>
+          <h1>{stage === "code" ? (enrol ? "Set up your authenticator" : "Authenticator code") : firstRun ? "Create the owner account" : "Admin sign-in"}</h1>
           <p className="muted small">
             {stage === "code"
               ? enrol

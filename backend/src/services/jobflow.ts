@@ -1,7 +1,7 @@
 import { db, many, one, type Q } from "../config/db.js";
 import { env } from "../config/env.js";
 import { badRequest, conflict, forbidden, notFound } from "../utils/http.js";
-import { estimateMinutes, etaMinutes, haversineKm, inServiceArea, type Point } from "../utils/geo.js";
+import { estimateMinutes, etaMinutes, haversineKm, inKenya, inServiceArea, type Point } from "../utils/geo.js";
 import { kes, shortName, timeEAT, whenEAT } from "../utils/kenya.js";
 import { randomToken, shortRef } from "../utils/security.js";
 import { adminAlert, logEvent, SYSTEM, type Actor } from "./audit.js";
@@ -11,7 +11,7 @@ import { notifyAll, type After } from "./notify.js";
 import type { PaymentRow } from "./payments.js";
 import { startPayment } from "./payments.js";
 import { queuePayout, sendJobPayouts } from "./payouts.js";
-import { pct, quote, split, type Split } from "./pricing.js";
+import { pct, quote, split, type Pricing, type Split } from "./pricing.js";
 import { getSettings, type Settings } from "./settings.js";
 import { queueSms } from "./sms.js";
 
@@ -34,9 +34,15 @@ export type JobRow = {
   service_id: string | null;
   service_name: string;
   category_id: string;
-  pricing: "flat" | "hourly";
+  pricing: Pricing;
   rate_kes: number;
   hours: number;
+  unit_label: string;
+  quantity: number;
+  shift_hours: number | null;
+  overtime_hours: number;
+  overtime_rate_kes: number | null;
+  zone: "nairobi" | "outside";
   base_kes: number;
   client_fee_pct: number;
   client_fee_kes: number;
@@ -154,7 +160,12 @@ async function settleEscrow(q: Q, j: JobRow, actor: Actor, how: { workerGross: n
 
 export type NewJob = {
   serviceId: string;
+  /** Hourly services. */
   hours?: number;
+  /** Per-unit services: feet of trench, for example. */
+  quantity?: number;
+  /** Shift services: hours beyond the standard shift, billed hourly where the schedule allows. */
+  overtimeHours?: number;
   address: string;
   lat: number;
   lng: number;
@@ -166,15 +177,35 @@ export type NewJob = {
 
 export async function createJob(clientId: string, b: NewJob): Promise<JobRow> {
   const s = await getSettings();
-  const svc = await one<{ id: string; name: string; category_id: string; pricing: "flat" | "hourly"; rate_kes: number; min_hours: number; active: boolean; cat_active: boolean }>(
-    db(),
-    `select s.*, c.active as cat_active from services s join categories c on c.id = s.category_id where s.id = $1`,
-    [b.serviceId],
-  );
+  const svc = await one<{
+    id: string; name: string; category_id: string; pricing: Pricing; rate_kes: number; unit_label: string; min_hours: number; shift_hours: number;
+    overtime_rate_kes: number | null; zone: "nairobi" | "outside"; active: boolean; cat_active: boolean;
+  }>(db(), `select s.*, c.active as cat_active from services s join categories c on c.id = s.category_id where s.id = $1`, [b.serviceId]);
   if (!svc || !svc.active || !svc.cat_active) throw badRequest("That service isn't available right now");
-  if (!inServiceArea(b, s.service_radius_km)) throw badRequest("We only cover Nairobi for now. Choose an address in Nairobi.", [{ path: "address", message: "Outside Nairobi" }]);
-  const hours = svc.pricing === "hourly" ? Number(b.hours ?? svc.min_hours) : 1;
+
+  // Zoning: site visits are priced by whether the site is in the Nairobi area or out of station.
+  const inNairobi = inServiceArea(b, s.service_radius_km);
+  if (svc.zone === "outside") {
+    if (inNairobi) throw badRequest("This site is in the Nairobi area. Choose the Nairobi visit rate instead.", [{ path: "address", message: "Inside the Nairobi area" }]);
+    if (!inKenya(b)) throw badRequest("Choose a site in Kenya", [{ path: "address", message: "Outside Kenya" }]);
+  } else if (!inNairobi) {
+    const outside = await one(db(), `select 1 from services where category_id = $1 and zone = 'outside' and active`, [svc.category_id]);
+    throw badRequest(outside ? "This site is outside the Nairobi area. Choose the out-of-station rate instead." : "We only cover the Nairobi area for this service. Choose an address in Nairobi.", [
+      { path: "address", message: "Outside the Nairobi area" },
+    ]);
+  }
+
+  const hours = Number(b.hours ?? svc.min_hours);
   if (svc.pricing === "hourly" && (hours < svc.min_hours || hours > 24)) throw badRequest(`Book between ${svc.min_hours} and 24 hours`, [{ path: "hours", message: `At least ${svc.min_hours}` }]);
+  const quantity = Number(b.quantity ?? svc.min_hours);
+  if (svc.pricing === "per_unit" && (quantity < svc.min_hours || quantity > 100_000 || !Number.isFinite(quantity)))
+    throw badRequest(`Enter at least ${svc.min_hours} ${svc.unit_label || "units"}`, [{ path: "quantity", message: `At least ${svc.min_hours}` }]);
+  const overtimeHours = Number(b.overtimeHours ?? 0);
+  if (svc.pricing === "shift" && overtimeHours > 0) {
+    // Hours past the standard shift move to hourly billing only where the schedule has an hourly rate.
+    if (!svc.overtime_rate_kes) throw badRequest(`This is a standard ${svc.shift_hours}-hour shift. Book another shift for longer work.`, [{ path: "overtimeHours", message: "No overtime rate" }]);
+    if (overtimeHours > 8) throw badRequest("Add up to 8 hours beyond the shift", [{ path: "overtimeHours", message: "Up to 8" }]);
+  }
   let scheduled: Date | null = null;
   if (b.scheduledFor) {
     scheduled = new Date(b.scheduledFor);
@@ -186,19 +217,31 @@ export async function createJob(clientId: string, b: NewJob): Promise<JobRow> {
     const dup = await one<JobRow>(db(), `select * from jobs where client_id = $1 and client_key = $2`, [clientId, b.clientKey]);
     if (dup) return dup;
   }
-  const qt = quote({ pricing: svc.pricing, rate: svc.rate_kes, hours, clientFeePct: s.client_fee_pct, workerFeePct: s.worker_fee_pct });
+  const qt = quote({
+    pricing: svc.pricing,
+    rate: svc.rate_kes,
+    hours,
+    quantity,
+    shiftHours: svc.shift_hours,
+    overtimeHours,
+    overtimeRate: svc.overtime_rate_kes,
+    clientFeePct: s.client_fee_pct,
+    workerFeePct: s.worker_fee_pct,
+  });
   return db().tx(async (q) => {
     const j = await one<JobRow>(
       q,
       `insert into jobs (ref, client_id, client_key, service_id, service_name, category_id, pricing, rate_kes, hours, base_kes, client_fee_pct, client_fee_kes, total_kes,
-                         worker_fee_pct, address, lat, lng, address_notes, description, scheduled_for, invoice_token)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) returning *`,
+                         worker_fee_pct, address, lat, lng, address_notes, description, scheduled_for, invoice_token,
+                         unit_label, quantity, shift_hours, overtime_hours, overtime_rate_kes, zone)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) returning *`,
       [
         shortRef("MJ-"), clientId, b.clientKey ?? null, svc.id, svc.name, svc.category_id, svc.pricing, svc.rate_kes, qt.hours, qt.base, s.client_fee_pct, qt.clientFee, qt.total,
         s.worker_fee_pct, b.address, b.lat, b.lng, b.addressNotes ?? "", b.description, scheduled, randomToken(),
+        svc.unit_label, qt.quantity, svc.pricing === "shift" ? svc.shift_hours : null, qt.overtimeHours, svc.pricing === "shift" ? svc.overtime_rate_kes : null, svc.zone,
       ],
     );
-    await logEvent(q, j!.id, { type: "client", id: clientId }, "job.created", { service: svc.name, total: qt.total, scheduledFor: scheduled });
+    await logEvent(q, j!.id, { type: "client", id: clientId }, "job.created", { service: svc.name, total: qt.total, scheduledFor: scheduled, quantity: qt.quantity, overtimeHours: qt.overtimeHours });
     return j!;
   });
 }
@@ -395,13 +438,21 @@ export async function clientNoShow(workerId: string, jobId: string, note: string
 
 // ——— Extra hours or materials (PRD 6 and US-07) ———
 
-async function hourlyRateFor(q: Q, j: JobRow): Promise<number | null> {
+/**
+ * The rate for extra time on a job: the job's own hourly rate; for a shift, its overtime
+ * rate (hours past the 8-hour shift bill hourly where the schedule has a rate); otherwise the
+ * trade's hourly service, if it has one. Null means the worker states the amount.
+ */
+export async function hourlyRateFor(q: Q, j: Pick<JobRow, "pricing" | "rate_kes" | "overtime_rate_kes" | "category_id">): Promise<number | null> {
   if (j.pricing === "hourly") return j.rate_kes;
+  if (j.pricing === "shift") return j.overtime_rate_kes ?? null;
   const r = await one<{ rate_kes: number }>(q, `select rate_kes from services where category_id = $1 and pricing = 'hourly' and active order by sort limit 1`, [j.category_id]);
   return r?.rate_kes ?? null;
 }
 
-export async function requestExtra(workerId: string, jobId: string, b: { kind: "hours" | "materials"; hours?: number; amount?: number; reason: string }, photoMediaId: string) {
+export const unitWord = (label: string, n: number) => (label === "ft" ? (n === 1 ? "foot" : "feet") : `${label || "unit"}${n === 1 ? "" : "s"}`);
+
+export async function requestExtra(workerId: string, jobId: string, b: { kind: "hours" | "materials" | "units"; hours?: number; units?: number; amount?: number; reason: string }, photoMediaId: string) {
   return run(async (q, f, s) => {
     const j = await workerJob(q, workerId, jobId);
     if (j.status !== "ON_SITE" && j.status !== "IN_PROGRESS") throw conflict("Extra work can be requested only on site");
@@ -413,17 +464,24 @@ export async function requestExtra(workerId: string, jobId: string, b: { kind: "
       if (!b.hours || b.hours <= 0 || b.hours > 12) throw badRequest("Enter between 0.5 and 12 extra hours", [{ path: "hours", message: "0.5 to 12" }]);
       if (rate) amount = Math.round(rate * b.hours);
     }
+    if (b.kind === "units") {
+      // More of the same measured work (feet of trench) at the job's own rate.
+      if (j.pricing !== "per_unit") throw badRequest("This job isn't priced per unit");
+      if (!b.units || b.units <= 0 || b.units > 100_000) throw badRequest(`Enter how many more ${unitWord(j.unit_label, 2)}`, [{ path: "units", message: "Required" }]);
+      amount = Math.round(j.rate_kes * b.units);
+    }
     if (amount < 50 || amount > 500_000) throw badRequest("Enter an amount between KES 50 and 500,000", [{ path: "amount", message: "50 to 500,000" }]);
     const fee = pct(amount, s.client_fee_pct);
     const x = await one<{ id: string }>(
       q,
-      `insert into extra_requests (job_id, worker_id, kind, hours, amount_kes, client_fee_kes, reason, photo_media_id) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-      [j.id, workerId, b.kind, b.kind === "hours" ? b.hours : null, amount, fee, b.reason, photoMediaId],
+      `insert into extra_requests (job_id, worker_id, kind, hours, units, amount_kes, client_fee_kes, reason, photo_media_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+      [j.id, workerId, b.kind, b.kind === "hours" ? b.hours : null, b.kind === "units" ? b.units : null, amount, fee, b.reason, photoMediaId],
     );
     await q.query(`insert into job_photos (job_id, media_id, kind, ref_id, uploaded_by) values ($1, $2, 'extra', $3, $4)`, [j.id, photoMediaId, x!.id, workerId]);
-    await logEvent(q, j.id, { type: "worker", id: workerId }, "extra.requested", { extraId: x!.id, kind: b.kind, hours: b.hours, amount, reason: b.reason });
+    await logEvent(q, j.id, { type: "worker", id: workerId }, "extra.requested", { extraId: x!.id, kind: b.kind, hours: b.hours, units: b.units, amount, reason: b.reason });
     const n = await names(q, j);
-    const what = b.kind === "hours" ? `${b.hours} extra hour${b.hours === 1 ? "" : "s"}` : "materials";
+    const what =
+      b.kind === "hours" ? `${b.hours} extra hour${b.hours === 1 ? "" : "s"}` : b.kind === "units" ? `${b.units} more ${unitWord(j.unit_label, b.units!)}` : "materials";
     f.notices.push({
       userId: j.client_id,
       n: {

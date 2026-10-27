@@ -5,9 +5,20 @@ import { useApi } from "../api/client";
 import { AddressPicker } from "../components/AddressPicker";
 import { CategoryIcon, Sheet, Skeleton, StatusBadge } from "../components/ui";
 import { useAuth, useConfig } from "../context/AuthContext";
-import { kes } from "../lib/format";
+import { kes, ratePhrase } from "../lib/format";
 import { saveWhere, useWhere } from "../lib/where";
 import type { Category, ClientJob } from "../types";
+
+/** Trades grouped as in the rate schedule: general labor, skilled trades, management. */
+function sections(cats: Category[]): [string, Category[]][] {
+  const out = new Map<string, Category[]>();
+  for (const c of cats) {
+    if (!c.services.length) continue;
+    const k = c.section || "Trades";
+    out.set(k, [...(out.get(k) ?? []), c]);
+  }
+  return [...out.entries()];
+}
 
 export default function Home() {
   const { me } = useAuth();
@@ -44,19 +55,17 @@ export default function Home() {
       )}
 
       <section className="hero">
-        <h1>Vetted trades, on the clock.</h1>
-        <p>Plumbers, electricians, site managers and general workers across Nairobi. See the price before you book, follow your worker on the map, and pay only when you approve the work.</p>
+        <h1>Book construction workers in Nairobi</h1>
+        <p>General workers, plumbers, electricians, welders, fundis and site managers. See the rate before you book, follow your worker on the map, and pay only when you approve the work.</p>
       </section>
 
-      <section className="stack g-12" aria-labelledby="trades">
-        <div className="section-title" id="trades">
-          What do you need?
-        </div>
-        <div className="cats">
-          {cats.data
-            ? cats.data.categories.map((c) => {
-                const from = Math.min(...c.services.map((s) => s.rate));
-                const hourly = c.services.find((s) => s.rate === from)?.pricing === "hourly";
+      {cats.data ? (
+        sections(cats.data.categories).map(([section, list]) => (
+          <section className="stack g-12" key={section} aria-label={section}>
+            <div className="section-title">{section}</div>
+            <div className="cats">
+              {list.map((c) => {
+                const first = c.services[0];
                 return (
                   <Link key={c.id} to={`/book/${c.id}`} className="cat">
                     <span className="cat-icon">
@@ -64,18 +73,25 @@ export default function Home() {
                     </span>
                     <h3>{c.name}</h3>
                     <p>{c.blurb}</p>
-                    {Number.isFinite(from) && (
+                    {first && (
                       <span className="from">
-                        From {kes(from)}
-                        {hourly ? "/h" : ""}
+                        {ratePhrase(first)}
+                        {c.services.length > 1 ? ` · ${c.services.length} options` : ""}
                       </span>
                     )}
                   </Link>
                 );
-              })
-            : [1, 2, 3, 4].map((i) => <Skeleton key={i} h={150} />)}
+              })}
+            </div>
+          </section>
+        ))
+      ) : (
+        <div className="cats">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} h={150} />
+          ))}
         </div>
-      </section>
+      )}
 
       <section className="stack g-12" aria-labelledby="how">
         <div className="section-title" id="how">

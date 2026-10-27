@@ -8,7 +8,7 @@ import { ReportProblem } from "../../components/ReportProblem";
 import { Badge, Button, Input, Notice, Segmented, Sheet, Skeleton, StarInput, Stars, StatusBadge, Textarea } from "../../components/ui";
 import { onLive } from "../../context/AuthContext";
 import { useToast } from "../../context/toast";
-import { ACTIVE, kes, mmss, time, when, WORKER_STATUS_LABEL } from "../../lib/format";
+import { ACTIVE, kes, mmss, time, unitWord, when, WORKER_STATUS_LABEL } from "../../lib/format";
 import { currentPosition, useShareLocation } from "../../lib/location";
 import type { WorkerJob } from "../../types";
 
@@ -265,14 +265,19 @@ export default function WorkJob() {
 
 function ExtraSheet({ open, job, onClose, onDone }: { open: boolean; job: WorkerJob; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
-  const [kind, setKind] = useState<"hours" | "materials">("materials");
+  const [kind, setKind] = useState<"hours" | "materials" | "units">("materials");
   const [hours, setHours] = useState("1");
+  const [units, setUnits] = useState("");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [photo, setPhoto] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hourly = job.service.pricing === "hourly";
+  // Extra time bills at the job's hourly or overtime rate; with no rate for the trade, the worker states the amount.
+  const rate = job.extraRates.hourly;
+  const unitRate = job.extraRates.unit;
+  const plural = unitWord(job.extraRates.unitLabel, 2);
+  const preview = kind === "hours" && rate ? Math.round(rate * (Number(hours) || 0)) : kind === "units" && unitRate ? Math.round(unitRate * (Number(units) || 0)) : null;
   const send = async () => {
     setError(null);
     if (!photo.length) return setError("Add a photo showing why it's needed");
@@ -282,7 +287,8 @@ function ExtraSheet({ open, job, onClose, onDone }: { open: boolean; job: Worker
       const form = new FormData();
       form.set("kind", kind);
       if (kind === "hours") form.set("hours", hours);
-      if (kind === "materials" || !hourly) form.set("amount", amount);
+      if (kind === "units") form.set("units", units);
+      if (kind === "materials" || (kind === "hours" && !rate)) form.set("amount", amount);
       form.set("reason", reason);
       form.set("photo", photo[0]);
       await api.post(`/worker/jobs/${job.id}/extras`, form);
@@ -307,13 +313,28 @@ function ExtraSheet({ open, job, onClose, onDone }: { open: boolean; job: Worker
           options={[
             { value: "materials", label: "Materials" },
             { value: "hours", label: "Extra time" },
+            ...(unitRate ? [{ value: "units" as const, label: `More ${plural}` }] : []),
           ]}
         />
-        {kind === "hours" ? (
-          <Input label="Extra hours" inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value.replace(/[^\d.]/g, "").slice(0, 4))} hint={hourly ? `${kes(job.service.rate)} per hour` : "Charged at the standard hourly rate for your trade"} />
-        ) : (
+        {kind === "hours" && (
+          <>
+            <Input
+              label={job.service.pricing === "shift" ? `Hours beyond the ${job.service.shiftHours ?? 8}-hour shift` : "Extra hours"}
+              inputMode="decimal"
+              value={hours}
+              onChange={(e) => setHours(e.target.value.replace(/[^\d.]/g, "").slice(0, 4))}
+              hint={rate ? `Billed at ${kes(rate)} per hour` : "There's no hourly rate for this job, so enter the amount below."}
+            />
+            {!rate && <Input label="Amount for the extra time (KES)" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, "").slice(0, 6))} />}
+          </>
+        )}
+        {kind === "units" && (
+          <Input label={`How many more ${plural}?`} inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value.replace(/[^\d.]/g, "").slice(0, 7))} hint={`Billed at ${kes(unitRate)} per ${unitWord(job.extraRates.unitLabel, 1)}`} />
+        )}
+        {kind === "materials" && (
           <Input label="Cost of materials (KES)" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, "").slice(0, 6))} hint="What you'll pay for them. The client sees this amount plus the service fee." />
         )}
+        {preview != null && preview > 0 && <p className="small">The client is asked to approve {kes(preview)} plus the service fee.</p>}
         <Textarea label="What it's for" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="e.g. 2 m of copper pipe and two elbows" />
         <div className="field">
           <span className="label">Photo</span>
