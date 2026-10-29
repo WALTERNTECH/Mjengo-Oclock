@@ -2,33 +2,49 @@ import { CircleCheck, Download, RefreshCw, TriangleAlert } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api/client";
-import { Badge, Button, Input, Notice, Segmented, Select, Skeleton, Stars, StatusBadge, Textarea } from "../components/ui";
+import { Badge, Button, Input, Notice, Segmented, Select, Sheet, Skeleton, Stars, StatusBadge, Textarea } from "../components/ui";
 import { useToast } from "../context/toast";
-import { dateTime, kes, prettyPhone, STATUS_LABEL } from "../lib/format";
+import { ago, dateTime, kes, prettyPhone, STATUS_LABEL } from "../lib/format";
 import type { JobStatus } from "../types";
 import type { AdminMe } from "./Admin";
 import { adminApi, download, useAdmin } from "./api";
 
 type Row = Record<string, any>;
 
-function Head({ title, children }: { title: string; children?: ReactNode }) {
+function Head({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
   return (
     <div className="admin-head">
-      <h1>{title}</h1>
-      {children}
+      <div className="admin-head-t">
+        <h1>{title}</h1>
+        {sub ? <p>{sub}</p> : null}
+      </div>
+      {children ? <div className="admin-head-a">{children}</div> : null}
     </div>
   );
 }
 
-function Tabs<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: [T, string][] }) {
+/** Filter tabs. On a phone they fold into one dropdown instead of a wrapping row. */
+function Tabs<T extends string>({ value, onChange, options, label = "Show" }: { value: T; onChange: (v: T) => void; options: [T, string][]; label?: string }) {
   return (
-    <div className="tabs">
-      {options.map(([v, l]) => (
-        <button key={v} aria-pressed={value === v} onClick={() => onChange(v)}>
-          {l}
-        </button>
-      ))}
-    </div>
+    <>
+      <div className="tabs" role="group" aria-label={label}>
+        {options.map(([v, l]) => (
+          <button key={v} aria-pressed={value === v} onClick={() => onChange(v)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <label className="tabs-select">
+        <span>{label}</span>
+        <select className="select" value={value} onChange={(e) => onChange(e.target.value as T)}>
+          {options.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+    </>
   );
 }
 
@@ -53,6 +69,51 @@ function useRun() {
 
 const Loading = () => <Skeleton h={240} />;
 
+/** A confirmation dialog for actions that change someone's access; on a phone it rises from the bottom. */
+function ConfirmSheet({
+  open,
+  title,
+  body,
+  reasonLabel,
+  confirmLabel,
+  danger,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  body?: ReactNode;
+  reasonLabel?: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    if (open) setReason("");
+  }, [open]);
+  const needs = Boolean(reasonLabel);
+  return (
+    <Sheet open={open} onClose={() => !busy && onCancel()} title={title}>
+      <div className="stack g-16">
+        {body ? <div className="small">{body}</div> : null}
+        {needs && <Textarea label={reasonLabel} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} autoFocus />}
+        <div className="sheet-actions">
+          <Button block onClick={onCancel} disabled={busy}>
+            Keep as it is
+          </Button>
+          <Button block variant={danger ? "danger" : "primary"} loading={busy} disabled={needs && reason.trim().length < 5} onClick={() => onConfirm(reason.trim())}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
 // ——— Overview ———
 
 type Metric = { value: number | null; target: number; n: number; unit: string; lowerIsBetter?: boolean; median?: number | null };
@@ -72,105 +133,339 @@ function onTarget(m: Metric) {
   return m.lowerIsBetter ? m.value < m.target : m.value >= m.target;
 }
 
-export function Overview() {
+type Dash = {
+  money: Row;
+  counts: Row;
+  series: { day: string; bookings: number; revenue: number }[];
+  trades: { id: string; name: string; approved: number; available: number; busy: number; waiting: number }[];
+  topWorkers: { id: string; full_name: string; trade: string; jobs: number; earned: number; rating: number | null }[];
+  activity: { kind: string; actor_type: string; created_at: string; job_id: string; ref: string; service_name: string }[];
+  alerts: { id: string; kind: string; title: string; created_at: string; job_id: string | null; ref: string | null }[];
+  metrics: Record<string, Metric>;
+  drivers: Row;
+};
+
+const ACTIVITY: Record<string, string> = {
+  "payment.held": "Booking paid and held",
+  "status.searching": "Looking for a worker",
+  "status.scheduled": "Scheduled",
+  "status.unassigned": "No worker accepted in time",
+  "status.accepted": "Worker accepted",
+  "status.en_route": "Worker on the way",
+  "status.on_site": "Worker arrived",
+  "status.in_progress": "Work started",
+  "status.completed": "Work finished",
+  "status.disputed": "Dispute raised",
+  "status.closed": "Closed and paid out",
+  "status.cancelled": "Cancelled",
+  "status.expired": "Not paid in time",
+  "extra.requested": "Extra work requested",
+  "report.raised": "Problem reported",
+  "escrow.settled": "Escrow settled",
+};
+
+function Delta({ now, prev, label }: { now: number; prev: number; label: string }) {
+  if (!prev && !now) return <span>{label}</span>;
+  const up = now >= prev;
+  const pctv = prev ? Math.round(((now - prev) / prev) * 100) : null;
+  return (
+    <>
+      <span className={`delta-chip ${now === prev ? "" : up ? "up" : "down"}`}>{now === prev ? "Same" : pctv == null ? "New" : `${up ? "+" : ""}${pctv}%`}</span>
+      <span>{label}</span>
+    </>
+  );
+}
+
+/** A 14-day line of bookings: muted, with today's point in the accent colour. */
+function Spark({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const max = Math.max(1, ...values);
+  const pts = values.map((v, i) => `${(i / (values.length - 1)) * 100},${30 - (v / max) * 26}`);
+  const last = pts[pts.length - 1].split(",");
+  return (
+    <svg className="spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={pts.join(" ")} fill="none" stroke="var(--faint)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+      <circle cx={last[0]} cy={last[1]} r="2.2" fill="var(--accent)" />
+    </svg>
+  );
+}
+
+function Card({ title, sub, action, children, className = "" }: { title: ReactNode; sub?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={`dcard ${className}`}>
+      <div className="dcard-head">
+        <div>
+          <h2>{title}</h2>
+          {sub ? <span className="sub">{sub}</span> : null}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function Overview({ me }: { me: AdminMe }) {
   const [days, setDays] = useState("30");
-  const { data } = useAdmin<{ money: Row; counts: Row; series: { day: string; bookings: number; revenue: number }[]; metrics: Record<string, Metric>; drivers: Row }>(`/overview?days=${days}`);
+  const { data, reload, loading } = useAdmin<Dash>(`/overview?days=${days}`);
+  useEffect(() => {
+    const t = setInterval(() => void reload(), 30_000);
+    return () => clearInterval(t);
+  }, [reload]);
   if (!data) return <Loading />;
   const c = data.counts;
-  const queue = (label: string, n: number, to: string, alarm = false) => (
-    <Link to={to} className={`tile queue ${n ? (alarm ? "alarm" : "hot") : ""}`}>
-      <span className="label">{label}</span>
-      <span className="value">{n}</span>
-    </Link>
-  );
+  const m = data.money;
+  const hour = Number(new Date().toLocaleString("en-KE", { hour: "numeric", hour12: false, timeZone: "Africa/Nairobi" }));
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const sandbox = data.drivers.payments === "simulated" || data.drivers.sms === "log";
+
+  // Queues that need a person, most serious first; only the ones with something in them.
+  const attention = [
+    { show: c.q_emergencies > 0, n: c.q_emergencies, label: c.q_emergencies === 1 ? "Emergency report" : "Emergency reports", to: "/admin/reports", tone: "bad" },
+    { show: c.q_unassigned > 0, n: c.q_unassigned, label: c.q_unassigned === 1 ? "Booking with no worker" : "Bookings with no worker", to: "/admin/unassigned", tone: "bad" },
+    { show: c.q_late > 0, n: c.q_late, label: c.q_late === 1 ? "Worker running late" : "Workers running late", to: "/admin/jobs?status=late", tone: "bad" },
+    { show: c.q_disputes > 0, n: c.q_disputes, label: c.q_disputes === 1 ? "Open dispute" : "Open disputes", to: "/admin/disputes", tone: "wait" },
+    { show: c.q_reports - c.q_emergencies > 0, n: c.q_reports - c.q_emergencies, label: "Problem reports", to: "/admin/reports", tone: "wait" },
+    { show: c.q_applications > 0, n: c.q_applications, label: c.q_applications === 1 ? "Worker to approve" : "Workers to approve", to: "/admin/approvals", tone: "wait" },
+    { show: c.q_payouts > 0, n: c.q_payouts, label: `Payouts to send · ${kes(m.payouts_waiting_kes)}`, to: "/admin/payouts", tone: "wait" },
+    { show: c.q_probation > 0, n: c.q_probation, label: "Probation jobs to review", to: "/admin/jobs?status=probation", tone: "wait" },
+    { show: c.q_flagged > 0, n: c.q_flagged, label: c.q_flagged === 1 ? "Flagged worker" : "Flagged workers", to: "/admin/workers?status=flagged", tone: "wait" },
+    { show: c.q_suspended > 0, n: c.q_suspended, label: "Suspended, pending review", to: "/admin/workers?status=suspended", tone: "info" },
+  ].filter((t) => t.show);
+
+  const last14 = data.series.slice(-14);
+  const onlinePct = c.workers ? Math.round((c.workers_online / c.workers) * 100) : 0;
+  const topMax = Math.max(1, ...data.topWorkers.map((w) => w.jobs));
+
   return (
-    <div className="stack g-24">
-      <Head title="Overview">
-        <Tabs value={days} onChange={setDays} options={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"]]} />
-      </Head>
-      {(data.drivers.payments === "simulated" || data.drivers.sms === "log") && (
+    <div className="dash">
+      <div className="dash-head">
+        <div>
+          <h1>
+            {greeting}, {me.name.split(" ")[0]}
+          </h1>
+          <p>
+            <span className="live-dot" />
+            {new Date().toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })} · updated {new Date().toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Africa/Nairobi" })}
+          </p>
+        </div>
+        <Button size="sm" icon={<RefreshCw />} loading={loading} onClick={() => void reload()} aria-label="Refresh">
+          <span className="t">Refresh</span>
+        </Button>
+      </div>
+
+      {sandbox && (
         <Notice tone="warn">
-          Test mode: {data.drivers.payments === "simulated" ? "M-Pesa is simulated (no money moves). " : ""}
-          {data.drivers.sms === "log" ? `SMS isn't connected (messages are only logged${data.drivers.otpOnScreen ? ", sign-in codes show on screen" : ""}). ` : ""}
-          Payouts: {data.drivers.payouts ?? "by hand"}. Maps: {data.drivers.maps}.
+          Test mode: {data.drivers.payments === "simulated" ? "M-Pesa is simulated, so no money moves. " : ""}
+          {data.drivers.sms === "log" ? `SMS isn't connected; messages are only logged${data.drivers.otpOnScreen ? " and sign-in codes show on screen" : ""}. ` : ""}
+          Payouts: {data.drivers.payouts ?? "sent by hand"}. Maps: {data.drivers.maps}.
         </Notice>
       )}
-      <section className="stack g-10">
-        <div className="section-title">Queues</div>
-        <div className="tiles">
-          {queue("Worker applications", c.q_applications, "/admin/workers")}
-          {queue("Unassigned bookings", c.q_unassigned, "/admin/jobs?status=UNASSIGNED", true)}
-          {queue("Open disputes", c.q_disputes, "/admin/disputes")}
-          {queue(c.q_emergencies ? `Safety reports (${c.q_emergencies} emergency)` : "Safety reports", c.q_reports, "/admin/reports", Boolean(c.q_emergencies))}
-          {queue("Payouts to send", c.q_payouts, "/admin/payouts")}
-          {queue("Probation jobs to review", c.q_probation, "/admin/jobs?status=probation")}
-          {queue("Flagged workers", c.q_flagged, "/admin/workers?status=flagged")}
-          {queue("Suspended workers", c.q_suspended, "/admin/workers?status=suspended")}
+
+      <div className="section-label">Needs attention</div>
+      {attention.length ? (
+        <div className="attn">
+          {attention.map((t) => (
+            <Link key={t.label} to={t.to} className={t.tone}>
+              <b>{t.n}</b>
+              <span className="l">{t.label}</span>
+            </Link>
+          ))}
         </div>
-      </section>
-      <section className="stack g-10">
-        <div className="section-title">Success metrics · last {days} days</div>
-        <div className="tiles">
-          {METRICS.map(([k, label, fmt, help]) => {
-            const m = data.metrics[k];
-            const ok = onTarget(m);
-            return (
-              <div key={k} className="tile" title={help}>
-                <span className="label">{label}</span>
-                <span className="value">{m.value == null ? "—" : fmt(m)}</span>
-                <span className="meta">
-                  {ok == null ? (
-                    "Not enough data yet"
-                  ) : ok ? (
-                    <span className="status-good row g-4">
-                      <CircleCheck /> On target
-                    </span>
-                  ) : (
-                    <span className="status-warn row g-4">
-                      <TriangleAlert /> Off target
-                    </span>
-                  )}
-                  <span>· n = {m.n}</span>
+      ) : (
+        <div className="all-clear">
+          <span className="ic">
+            <CircleCheck />
+          </span>
+          <span>
+            <b>All clear.</b> No emergencies, unassigned bookings, late workers, disputes, approvals or payouts waiting.
+          </span>
+        </div>
+      )}
+
+      <div className="section-label">Today</div>
+      <div className="kpis">
+        <div className="kpi hero">
+          <span className="k">Bookings confirmed</span>
+          <span className="v">{c.bookings_today}</span>
+          <span className="d">
+            <Delta now={c.bookings_today} prev={c.bookings_yesterday} label={`vs ${c.bookings_yesterday} yesterday`} />
+          </span>
+          <Spark values={last14.map((s) => s.bookings)} />
+        </div>
+        <div className="kpi">
+          <span className="k">Platform revenue</span>
+          <span className="v">{kes(m.revenue_today)}</span>
+          <span className="d">
+            <Delta now={m.revenue_today} prev={m.revenue_yesterday} label="vs yesterday" />
+          </span>
+        </div>
+        <Link to="/admin/jobs?status=active" className="kpi">
+          <span className="k">Jobs in progress</span>
+          <span className="v">{c.active_jobs}</span>
+          <span className="d">
+            {c.searching} looking for a worker · {c.awaiting_approval} awaiting approval · {c.completed_today} done today
+          </span>
+        </Link>
+        <Link to="/admin/workers?status=approved" className="kpi">
+          <span className="k">Workers available</span>
+          <span className="v">
+            {c.workers_online}
+            <span className="of"> / {c.workers}</span>
+          </span>
+          <div className="meter" aria-label={`${onlinePct}% available`}>
+            <i style={{ width: `${onlinePct}%` }} />
+          </div>
+          <span className="d">approved workers on duty now</span>
+        </Link>
+      </div>
+
+      <div className="section-label">Money</div>
+      <div className="kpis four">
+        <div className="kpi">
+          <span className="k">Held in escrow</span>
+          <span className="v">{kes(m.in_escrow)}</span>
+          <span className="d">{m.frozen ? `${kes(m.frozen)} frozen by disputes` : "none frozen by disputes"}</span>
+        </div>
+        <Link to="/admin/payouts" className="kpi">
+          <span className="k">Payouts to send</span>
+          <span className="v">{kes(m.payouts_waiting_kes)}</span>
+          <span className="d">
+            {c.q_payouts} waiting · {kes(m.paid_out_today)} paid today
+          </span>
+        </Link>
+        <div className="kpi">
+          <span className="k">Platform revenue, 30 days</span>
+          <span className="v">{kes(m.revenue_30)}</span>
+          <span className="d">from {kes(m.gmv_30)} of work paid out</span>
+        </div>
+        <div className="kpi">
+          <span className="k">Clients</span>
+          <span className="v">{c.clients}</span>
+          <span className="d">{c.workers} approved workers</span>
+        </div>
+      </div>
+
+      <div className="dash-grid">
+        <BookingsChart series={data.series} />
+        <Card title="Unseen alerts" sub={c.alerts ? `${c.alerts} waiting` : "Nothing new"} action={<Link to="/admin/alerts" className="link small">All alerts</Link>}>
+          {data.alerts.length ? (
+            <div className="feed">
+              {data.alerts.map((a) => (
+                <Link key={a.id} to={a.job_id ? `/admin/jobs/${a.job_id}` : "/admin/alerts"} className="feed-row">
+                  <span className={`sev-dot ${a.kind === "emergency" || a.kind === "unassigned" ? "bad" : "wait"}`} />
+                  <span className="grow">{a.title}</span>
+                  <time>{ago(a.created_at)}</time>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="small muted">No unseen alerts.</p>
+          )}
+        </Card>
+      </div>
+
+      <div className="dash-grid">
+        <Card title="Workers by trade" sub={`${c.workers_online} of ${c.workers} available`} action={<Link to="/admin/workers" className="link small">Workers</Link>}>
+          <div className="table-wrap plain">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Trade</th>
+                  <th className="num">Approved</th>
+                  <th className="num">Available</th>
+                  <th className="num">On a job</th>
+                  <th className="num">Jobs waiting</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.trades.map((t) => (
+                  <tr key={t.id}>
+                    <td>{t.name}</td>
+                    <td className="num">{t.approved}</td>
+                    <td className="num">{t.available}</td>
+                    <td className="num">{t.busy}</td>
+                    <td className={`num ${t.waiting && !t.available ? "red strong" : ""}`}>{t.waiting}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+        <Card title="Top workers" sub="Last 30 days">
+          {data.topWorkers.length ? (
+            <div className="bars-list">
+              {data.topWorkers.map((w) => (
+                <Link key={w.id} to={`/admin/workers/${w.id}`} className="bar-row">
+                  <span className="grow">
+                    <b>{w.full_name}</b>
+                    <small>
+                      {w.trade} · {w.rating != null ? `${w.rating} ★` : "no ratings yet"} · {kes(w.earned)} earned
+                    </small>
+                  </span>
+                  <span className="num strong">{w.jobs}</span>
+                  <span className="hbar" aria-hidden="true">
+                    <i style={{ width: `${(w.jobs / topMax) * 100}%` }} />
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="small muted">No completed jobs in the last 30 days.</p>
+          )}
+        </Card>
+      </div>
+
+      <div className="section-label">
+        <span>Success metrics</span>
+        <Tabs value={days} onChange={setDays} label="Period" options={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"]]} />
+      </div>
+      <div className="tiles">
+        {METRICS.map(([k, label, fmt, help]) => {
+          const mm = data.metrics[k];
+          const ok = onTarget(mm);
+          return (
+            <div key={k} className="tile" title={help}>
+              <span className="label">{label}</span>
+              <span className="value">{mm.value == null ? "—" : fmt(mm)}</span>
+              <span className="meta">
+                {ok == null ? (
+                  "Not enough data yet"
+                ) : ok ? (
+                  <span className="status-good row g-4">
+                    <CircleCheck /> On target
+                  </span>
+                ) : (
+                  <span className="status-warn row g-4">
+                    <TriangleAlert /> Off target
+                  </span>
+                )}
+                <span>· n = {mm.n}</span>
+              </span>
+              <span className="tiny muted">{help}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <Card title="Recent activity" sub="Across all jobs">
+        {data.activity.length ? (
+          <div className="feed">
+            {data.activity.map((e, i) => (
+              <Link key={i} to={`/admin/jobs/${e.job_id}`} className="feed-row">
+                <span className="feed-ref">{e.ref}</span>
+                <span className="grow">
+                  {ACTIVITY[e.kind] ?? e.kind}
+                  <small> · {e.service_name}</small>
                 </span>
-                <span className="tiny muted">{help}</span>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-      <section className="stack g-10">
-        <div className="section-title">Money and activity</div>
-        <div className="tiles">
-          <div className="tile">
-            <span className="label">Platform revenue, 30 days</span>
-            <span className="value">{kes(data.money.revenue_30)}</span>
-            <span className="meta">Today {kes(data.money.revenue_today)}</span>
+                <time>{ago(e.created_at)}</time>
+              </Link>
+            ))}
           </div>
-          <div className="tile">
-            <span className="label">Work value paid out, 30 days</span>
-            <span className="value">{kes(data.money.gmv_30)}</span>
-          </div>
-          <div className="tile">
-            <span className="label">Held in escrow now</span>
-            <span className="value">{kes(data.money.in_escrow)}</span>
-          </div>
-          <div className="tile">
-            <span className="label">Jobs in progress</span>
-            <span className="value">{c.active_jobs}</span>
-            <span className="meta">{c.searching} looking for a worker</span>
-          </div>
-          <div className="tile">
-            <span className="label">Approved workers</span>
-            <span className="value">{c.workers}</span>
-            <span className="meta">{c.workers_online} available now</span>
-          </div>
-          <div className="tile">
-            <span className="label">Clients</span>
-            <span className="value">{c.clients}</span>
-          </div>
-        </div>
-      </section>
-      <BookingsChart series={data.series} />
+        ) : (
+          <p className="small muted">No activity yet.</p>
+        )}
+      </Card>
     </div>
   );
 }
@@ -299,22 +594,23 @@ export function Alerts() {
 
 // ——— Workers ———
 
-const WORKER_TABS: [string, string][] = [["submitted", "To review"], ["more_info", "More info asked"], ["approved", "Approved"], ["flagged", "Flagged"], ["suspended", "Suspended"], ["rejected", "Rejected"], ["", "All"]];
+const WORKER_TABS: [string, string][] = [["approved", "Approved"], ["submitted", "To review"], ["more_info", "More info asked"], ["flagged", "Flagged"], ["suspended", "Suspended"], ["rejected", "Rejected"], ["", "All"]];
 
-export function Workers() {
+/** All workers with status tabs, or (locked to "submitted") the approvals queue. */
+export function Workers({ lock }: { lock?: string }) {
   const [params, setParams] = useSearchParams();
-  const status = params.get("status") ?? "submitted";
+  const status = lock ?? params.get("status") ?? "approved";
   const [q, setQ] = useState("");
   const nav = useNavigate();
   const { data } = useAdmin<{ workers: Row[] }>(`/workers?status=${status}&q=${encodeURIComponent(q)}`);
   return (
     <div className="stack g-16">
-      <Head title="Workers">
-        <div style={{ width: 260 }}>
+      <Head title={lock ? "Worker approvals" : "Workers"} sub={lock ? "Applications waiting for an ID and certificate check, oldest first." : undefined}>
+        <div className="head-search">
           <Input placeholder="Search name or phone" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </Head>
-      <Tabs value={status} onChange={(v) => setParams({ status: v })} options={WORKER_TABS} />
+      {!lock && <Tabs value={status} onChange={(v) => setParams({ status: v })} options={WORKER_TABS} />}
       {!data ? (
         <Loading />
       ) : !data.workers.length ? (
@@ -481,7 +777,7 @@ export function WorkerDetail({ me }: { me: AdminMe }) {
             </div>
           )}
         </div>
-        <div className="card stack g-14" style={{ position: "sticky", top: 20 }}>
+        <div className="card stack g-14 side-panel">
           <div className="row between">
             <span className="strong">Decision</span>
             <Badge tone={w.status === "approved" ? "green" : w.status === "submitted" ? "amber" : ""}>{w.status.replace("_", " ")}</Badge>
@@ -542,9 +838,10 @@ const JOB_TABS: [string, string][] = [
   ["", "All"],
 ];
 
-export function Jobs() {
+/** All jobs with status tabs, or (locked to "UNASSIGNED") the bookings no worker took. */
+export function Jobs({ lock }: { lock?: string }) {
   const [params, setParams] = useSearchParams();
-  const status = params.get("status") ?? "";
+  const status = lock ?? params.get("status") ?? "";
   const [q, setQ] = useState("");
   const nav = useNavigate();
   const { data, reload } = useAdmin<{ jobs: Row[] }>(`/jobs?status=${status}&q=${encodeURIComponent(q)}`);
@@ -554,12 +851,12 @@ export function Jobs() {
   }, [reload]);
   return (
     <div className="stack g-16">
-      <Head title="Jobs">
-        <div style={{ width: 280 }}>
+      <Head title={lock ? "Unassigned bookings" : "Jobs"} sub={lock ? "Paid bookings no worker accepted within the dispatch window. Assign someone or restart dispatch." : undefined}>
+        <div className="head-search">
           <Input placeholder="Search ref, name or phone" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </Head>
-      <Tabs value={status} onChange={(v) => setParams(v ? { status: v } : {})} options={JOB_TABS} />
+      {!lock && <Tabs value={status} onChange={(v) => setParams(v ? { status: v } : {})} options={JOB_TABS} />}
       {!data ? (
         <Loading />
       ) : !data.jobs.length ? (
@@ -721,7 +1018,7 @@ export function JobDetail({ me }: { me: AdminMe }) {
           {data.ratings.length > 0 && <Table title="Ratings" head={["By", "Stars", "Review"]} rows={data.ratings.map((r: Row) => [r.rater_role, r.stars, r.review])} />}
         </div>
 
-        <div className="stack g-14" style={{ position: "sticky", top: 20 }}>
+        <div className="stack g-14 side-panel">
           {ops && open && (
             <div className="card stack g-10">
               <div className="strong">Dispatch by hand</div>
@@ -1397,13 +1694,15 @@ export function SettingsPage({ me }: { me: AdminMe }) {
 // ——— People, SMS, team, audit ———
 
 export function UsersPage() {
-  const [q, setQ] = useState("");
+  const [params] = useSearchParams();
+  const [q, setQ] = useState(params.get("q") ?? "");
   const { data, reload } = useAdmin<{ users: Row[] }>(`/users?q=${encodeURIComponent(q)}`);
   const { busy, run } = useRun();
+  const [target, setTarget] = useState<Row | null>(null);
   return (
     <div className="stack g-16">
-      <Head title="People">
-        <div style={{ width: 280 }}>
+      <Head title="Clients and accounts">
+        <div className="head-search">
           <Input placeholder="Search name, phone or email" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </Head>
@@ -1440,15 +1739,7 @@ export function UsersPage() {
                   <td className="num">{u.bookings}</td>
                   <td className="small muted">{dateTime(u.created_at)}</td>
                   <td>
-                    <Button
-                      size="sm"
-                      variant={u.status === "active" ? "danger" : "outline"}
-                      loading={busy === u.id}
-                      onClick={() => {
-                        const reason = window.prompt(u.status === "active" ? "Reason for suspending this account" : "Reason for reactivating");
-                        if (reason) void run(u.id, () => adminApi.post(`/users/${u.id}/status`, { status: u.status === "active" ? "suspended" : "active", reason }).then(reload), "Updated");
-                      }}
-                    >
+                    <Button size="sm" variant={u.status === "active" ? "danger" : "outline"} loading={busy === u.id} onClick={() => setTarget(u)}>
                       {u.status === "active" ? "Suspend" : "Reactivate"}
                     </Button>
                   </td>
@@ -1458,6 +1749,19 @@ export function UsersPage() {
           </table>
         </div>
       )}
+      <ConfirmSheet
+        open={Boolean(target)}
+        title={target?.status === "active" ? `Suspend ${target?.full_name || "this account"}?` : `Reactivate ${target?.full_name || "this account"}?`}
+        body={target?.status === "active" ? "They're signed out at once and can't book or work until reactivated." : "They can sign in again straight away."}
+        reasonLabel="Reason (kept in the audit log)"
+        confirmLabel={target?.status === "active" ? "Suspend" : "Reactivate"}
+        danger={target?.status === "active"}
+        busy={Boolean(target && busy === target.id)}
+        onCancel={() => setTarget(null)}
+        onConfirm={(reason) =>
+          void run(target!.id, () => adminApi.post(`/users/${target!.id}/status`, { status: target!.status === "active" ? "suspended" : "active", reason }).then(reload), "Updated").then((done) => done && setTarget(null))
+        }
+      />
     </div>
   );
 }
@@ -1508,11 +1812,22 @@ export function Team({ me }: { me: AdminMe }) {
   const { data, reload } = useAdmin<{ admins: Row[] }>(me.role === "owner" ? "/team" : null);
   const { busy, run } = useRun();
   const [f, setF] = useState({ name: "", email: "", role: "ops", password: "" });
+  const [removing, setRemoving] = useState<Row | null>(null);
   if (me.role !== "owner") return <Notice>Only the owner manages the team.</Notice>;
   if (!data) return <Loading />;
   return (
     <div className="stack g-20">
-      <Head title="Team" />
+      <Head title="Team and roles" />
+      <ConfirmSheet
+        open={Boolean(removing)}
+        title={`Remove ${removing?.name ?? ""}?`}
+        body="They lose access to the console at once. Their past actions stay in the audit log."
+        confirmLabel="Remove"
+        danger
+        busy={Boolean(removing && busy === `x-${removing.id}`)}
+        onCancel={() => setRemoving(null)}
+        onConfirm={() => void run(`x-${removing!.id}`, () => adminApi.put(`/team/${removing!.id}`, { remove: true }).then(reload), "Removed").then((done) => done && setRemoving(null))}
+      />
       <div className="table-wrap">
         <table className="data">
           <thead>
@@ -1550,7 +1865,7 @@ export function Team({ me }: { me: AdminMe }) {
                       <Button size="sm" loading={busy === `t-${a.id}`} onClick={() => void run(`t-${a.id}`, () => adminApi.put(`/team/${a.id}`, { resetAuthenticator: true }).then(reload), "They'll set up the authenticator again")}>
                         Reset authenticator
                       </Button>
-                      <Button size="sm" variant="danger" loading={busy === `x-${a.id}`} onClick={() => window.confirm(`Remove ${a.name}?`) && void run(`x-${a.id}`, () => adminApi.put(`/team/${a.id}`, { remove: true }).then(reload), "Removed")}>
+                      <Button size="sm" variant="danger" loading={busy === `x-${a.id}`} onClick={() => setRemoving(a)}>
                         Remove
                       </Button>
                     </div>

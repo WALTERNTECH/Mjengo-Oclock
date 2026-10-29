@@ -1,11 +1,11 @@
 import "../styles/admin.css";
-import { Bell, Briefcase, ClipboardList, Gauge, IdCard, LogOut, Menu, MessageSquare, Receipt, ScrollText, Settings, ShieldAlert, Siren, Tags, UserCog, Users, Wallet } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { errorMessage } from "../api/client";
 import { Mark } from "../components/Logo";
 import { Button, Input, Spinner } from "../components/ui";
 import { adminApi, adminToken, setOnExpired, useAdmin } from "./api";
+import { Shell } from "./Shell";
 import { Alerts, Audit, Disputes, JobDetail, Jobs, Overview, Payments, Payouts, Rates, Reports, SettingsPage, Sms, Team, UsersPage, WorkerDetail, Workers } from "./pages";
 
 export type AdminMe = { id: string; email: string; name: string; role: "owner" | "admin" | "ops" | "finance" };
@@ -41,7 +41,7 @@ export default function Admin() {
         <Spinner />
       </div>
     );
-  return <Shell me={me} onSignOut={() => (adminToken.set(null), setToken(null), setMe(null))} />;
+  return <Console me={me} onSignOut={() => (adminToken.set(null), setToken(null), setMe(null))} />;
 }
 
 function SignIn({ onDone }: { onDone: (token: string) => void }) {
@@ -131,131 +131,30 @@ function SignIn({ onDone }: { onDone: (token: string) => void }) {
   );
 }
 
-function Shell({ me, onSignOut }: { me: AdminMe; onSignOut: () => void }) {
-  const nav = useNavigate();
-  const loc = useLocation();
-  const [open, setOpen] = useState(false);
-  const ov = useAdmin<{ counts: Record<string, number> }>(`/overview?_=${loc.pathname}`);
-  const c = ov.data?.counts ?? {};
-  useEffect(() => setOpen(false), [loc.pathname]);
-  useEffect(() => {
-    const t = setInterval(() => void ov.reload(), 20_000);
-    return () => clearInterval(t);
-  }, [ov.reload]); // eslint-disable-line react-hooks/exhaustive-deps
-  const link = ({ isActive }: { isActive: boolean }) => (isActive ? "active" : "");
-  const Count = ({ n, alert }: { n?: number; alert?: boolean }) => (n ? <span className={`count ${alert ? "alert" : ""}`}>{n}</span> : null);
-  const can = (...roles: AdminMe["role"][]) => me.role === "owner" || roles.includes(me.role);
+function Console({ me, onSignOut }: { me: AdminMe; onSignOut: () => void }) {
   return (
-    <div className={`admin ${open ? "nav-open" : ""}`}>
-      <aside className="admin-side">
-        <div className="brand row g-10">
-          <Mark size={30} />
-          <span className="wordmark" style={{ fontSize: 16 }}>
-            Mjengo <b>O'clock</b>
-          </span>
-        </div>
-        <NavLink to="/admin" end className={link}>
-          <Gauge /> Overview
-        </NavLink>
-        <NavLink to="/admin/alerts" className={link}>
-          <Bell /> Alerts <Count n={c.alerts} />
-        </NavLink>
-        <div className="group">Queues</div>
-        <NavLink to="/admin/workers" className={link}>
-          <IdCard /> Worker approvals <Count n={c.q_applications} />
-        </NavLink>
-        <NavLink to="/admin/jobs?status=UNASSIGNED" className={() => (loc.pathname === "/admin/jobs" && loc.search.includes("UNASSIGNED") ? "active" : "")}>
-          <Siren /> Unassigned <Count n={c.q_unassigned} alert />
-        </NavLink>
-        <NavLink to="/admin/disputes" className={link}>
-          <ShieldAlert /> Disputes <Count n={c.q_disputes} />
-        </NavLink>
-        <NavLink to="/admin/reports" className={link}>
-          <MessageSquare /> Safety reports <Count n={c.q_reports} alert={Boolean(c.q_emergencies)} />
-        </NavLink>
-        <div className="group">Operations</div>
-        <NavLink to="/admin/jobs" className={() => (loc.pathname.startsWith("/admin/jobs") && !loc.search.includes("UNASSIGNED") ? "active" : "")}>
-          <ClipboardList /> Jobs
-        </NavLink>
-        <NavLink to="/admin/people" className={link}>
-          <Users /> People
-        </NavLink>
-        <NavLink to="/admin/rates" className={link}>
-          <Tags /> Trades and rates
-        </NavLink>
-        {can("admin", "finance") && (
-          <>
-            <div className="group">Money</div>
-            <NavLink to="/admin/payments" className={link}>
-              <Receipt /> Payments
-            </NavLink>
-            <NavLink to="/admin/payouts" className={link}>
-              <Wallet /> Payouts <Count n={c.q_payouts} />
-            </NavLink>
-          </>
-        )}
-        <div className="group">Platform</div>
-        <NavLink to="/admin/settings" className={link}>
-          <Settings /> Fees and policies
-        </NavLink>
-        <NavLink to="/admin/sms" className={link}>
-          <Briefcase /> SMS log
-        </NavLink>
-        {can() && (
-          <NavLink to="/admin/team" className={link}>
-            <UserCog /> Team
-          </NavLink>
-        )}
-        {can("admin") && (
-          <NavLink to="/admin/audit" className={link}>
-            <ScrollText /> Audit log
-          </NavLink>
-        )}
-        <div className="foot stack g-10">
-          <span>
-            {me.name} · {me.role}
-          </span>
-          <button
-            className="row g-8"
-            onClick={() => {
-              onSignOut();
-              nav("/admin");
-            }}
-          >
-            <LogOut size={15} /> Sign out
-          </button>
-        </div>
-      </aside>
-      <div>
-        <div className="admin-top">
-          <button className="icon-btn" aria-label="Menu" onClick={() => setOpen((o) => !o)}>
-            <Menu />
-          </button>
-          <Mark size={26} />
-          <span className="strong">Admin</span>
-        </div>
-        <main className="admin-main">
-          <Routes>
-            <Route index element={<Overview />} />
-            <Route path="alerts" element={<Alerts />} />
-            <Route path="workers" element={<Workers />} />
-            <Route path="workers/:id" element={<WorkerDetail me={me} />} />
-            <Route path="jobs" element={<Jobs />} />
-            <Route path="jobs/:id" element={<JobDetail me={me} />} />
-            <Route path="disputes" element={<Disputes />} />
-            <Route path="reports" element={<Reports />} />
-            <Route path="people" element={<UsersPage />} />
-            <Route path="rates" element={<Rates />} />
-            <Route path="payments" element={<Payments />} />
-            <Route path="payouts" element={<Payouts />} />
-            <Route path="settings" element={<SettingsPage me={me} />} />
-            <Route path="sms" element={<Sms />} />
-            <Route path="team" element={<Team me={me} />} />
-            <Route path="audit" element={<Audit />} />
-            <Route path="*" element={<Navigate to="/admin" replace />} />
-          </Routes>
-        </main>
-      </div>
-    </div>
+    <Shell me={me} onSignOut={onSignOut}>
+      <Routes>
+        <Route index element={<Overview me={me} />} />
+        <Route path="alerts" element={<Alerts />} />
+        <Route path="unassigned" element={<Jobs lock="UNASSIGNED" />} />
+        <Route path="approvals" element={<Workers lock="submitted" />} />
+        <Route path="workers" element={<Workers />} />
+        <Route path="workers/:id" element={<WorkerDetail me={me} />} />
+        <Route path="jobs" element={<Jobs />} />
+        <Route path="jobs/:id" element={<JobDetail me={me} />} />
+        <Route path="disputes" element={<Disputes />} />
+        <Route path="reports" element={<Reports />} />
+        <Route path="people" element={<UsersPage />} />
+        <Route path="rates" element={<Rates />} />
+        <Route path="payments" element={<Payments />} />
+        <Route path="payouts" element={<Payouts />} />
+        <Route path="settings" element={<SettingsPage me={me} />} />
+        <Route path="sms" element={<Sms />} />
+        <Route path="team" element={<Team me={me} />} />
+        <Route path="audit" element={<Audit />} />
+        <Route path="*" element={<Navigate to="/admin" replace />} />
+      </Routes>
+    </Shell>
   );
 }

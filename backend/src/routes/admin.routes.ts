@@ -160,14 +160,22 @@ export async function metrics(days: number) {
   };
 }
 
+// The console polls this for the menu counts (?lite=1 skips the heavier parts) and the
+// dashboard reads all of it, most urgent first.
 adminRouter.get("/overview", any, async (req, res) => {
   const days = Math.min(365, Math.max(1, Number(req.query.days ?? 30) || 30));
+  const lite = req.query.lite === "1";
+  const today = `(now() at time zone 'Africa/Nairobi')::date`;
   const money = await one<Record<string, number>>(
     db(),
     `select coalesce(sum(platform_kes) filter (where closed_at > now() - interval '30 days'), 0)::int as revenue_30,
-            coalesce(sum(platform_kes) filter (where closed_at > now() - interval '1 day'), 0)::int as revenue_today,
+            coalesce(sum(platform_kes) filter (where (closed_at at time zone 'Africa/Nairobi')::date = ${today}), 0)::int as revenue_today,
+            coalesce(sum(platform_kes) filter (where (closed_at at time zone 'Africa/Nairobi')::date = ${today} - 1), 0)::int as revenue_yesterday,
             coalesce(sum(base_kes + extras_kes) filter (where closed_at > now() - interval '30 days' and outcome in ('done','split')), 0)::int as gmv_30,
-            coalesce(sum(paid_kes) filter (where escrow in ('HELD','FROZEN')), 0)::int as in_escrow
+            coalesce(sum(paid_kes) filter (where escrow in ('HELD','FROZEN')), 0)::int as in_escrow,
+            coalesce(sum(paid_kes) filter (where escrow = 'FROZEN'), 0)::int as frozen,
+            (select coalesce(sum(amount_kes), 0) from payouts where status in ('QUEUED','FAILED'))::int as payouts_waiting_kes,
+            (select coalesce(sum(amount_kes), 0) from payouts where status = 'PAID' and paid_at > now() - interval '1 day')::int as paid_out_today
        from jobs`,
   );
   const counts = await one<Record<string, number>>(
@@ -187,9 +195,39 @@ adminRouter.get("/overview", any, async (req, res) => {
       (select count(*) from jobs where status = any($1::text[]))::int as active_jobs,
       (select count(*) from worker_profiles where status = 'approved')::int as workers,
       (select count(*) from worker_profiles where status = 'approved' and available)::int as workers_online,
-      (select count(*) from users u where status = 'active' and not exists (select 1 from worker_profiles w where w.user_id = u.id))::int as clients`,
+      (select count(*) from users u where status = 'active' and not exists (select 1 from worker_profiles w where w.user_id = u.id))::int as clients,
+      (select count(*) from jobs where status in ('ACCEPTED','EN_ROUTE') and worker_no_show_at is not null)::int as q_late,
+      (select count(*) from jobs where status = 'COMPLETED')::int as awaiting_approval,
+      (select count(*) from jobs where (confirmed_at at time zone 'Africa/Nairobi')::date = ${today})::int as bookings_today,
+      (select count(*) from jobs where (confirmed_at at time zone 'Africa/Nairobi')::date = ${today} - 1)::int as bookings_yesterday,
+      (select count(*) from jobs where outcome = 'done' and (closed_at at time zone 'Africa/Nairobi')::date = ${today})::int as completed_today`,
     [["ACCEPTED", "EN_ROUTE", "ON_SITE", "IN_PROGRESS"]],
   );
+  if (lite) return res.json({ counts, money, drivers: { payments: paymentDriver(), payouts: payoutDriver(), sms: smsConfigured() ? "celcom" : "log", otpOnScreen: env.otpEcho } });
+  const trades = await many(
+    db(),
+    `select c.id, c.name,
+            (select count(*) from worker_profiles w where w.category_id = c.id and w.status = 'approved')::int as approved,
+            (select count(*) from worker_profiles w where w.category_id = c.id and w.status = 'approved' and w.available)::int as available,
+            (select count(*) from jobs j where j.category_id = c.id and j.status in ('ACCEPTED','EN_ROUTE','ON_SITE','IN_PROGRESS'))::int as busy,
+            (select count(*) from jobs j where j.category_id = c.id and j.status in ('SEARCHING','UNASSIGNED'))::int as waiting
+       from categories c where c.active order by c.sort`,
+  );
+  const topWorkers = await many(
+    db(),
+    `select u.id, u.full_name, c.name as trade, count(j.id)::int as jobs, coalesce(sum(j.worker_net_kes), 0)::int as earned,
+            case when w.rating_count > 0 then round(w.rating_sum::numeric / w.rating_count, 1)::float end as rating
+       from jobs j join users u on u.id = j.worker_id join worker_profiles w on w.user_id = u.id left join categories c on c.id = w.category_id
+      where j.outcome in ('done','split') and j.closed_at > now() - interval '30 days'
+      group by u.id, u.full_name, c.name, w.rating_count, w.rating_sum order by jobs desc, earned desc limit 5`,
+  );
+  const activity = await many(
+    db(),
+    `select e.kind, e.actor_type, e.created_at, j.id as job_id, j.ref, j.service_name from job_events e join jobs j on j.id = e.job_id
+      where e.kind like 'status.%' or e.kind in ('payment.held','extra.requested','report.raised','escrow.settled')
+      order by e.created_at desc limit 12`,
+  );
+  const alerts = await many(db(), `select a.id, a.kind, a.title, a.created_at, a.job_id, j.ref from admin_alerts a left join jobs j on j.id = a.job_id where a.seen_at is null order by a.created_at desc limit 6`);
   const series = await many(
     db(),
     `with days as (select generate_series((now() at time zone 'Africa/Nairobi')::date - 29, (now() at time zone 'Africa/Nairobi')::date, interval '1 day')::date as day)
@@ -198,7 +236,7 @@ adminRouter.get("/overview", any, async (req, res) => {
             (select coalesce(sum(platform_kes), 0) from jobs j where (j.closed_at at time zone 'Africa/Nairobi')::date = d.day)::int as revenue
        from days d order by d.day`,
   );
-  res.json({ money, counts, series, metrics: await metrics(days), drivers: { payments: paymentDriver(), payouts: payoutDriver(), sms: smsConfigured() ? "celcom" : "log", otpOnScreen: env.otpEcho, maps: env.maps.mapboxToken ? "mapbox" : "photon + estimate" } });
+  res.json({ money, counts, series, trades, topWorkers, activity, alerts, metrics: await metrics(days), drivers: { payments: paymentDriver(), payouts: payoutDriver(), sms: smsConfigured() ? "celcom" : "log", otpOnScreen: env.otpEcho, maps: env.maps.mapboxToken ? "mapbox" : "photon + estimate" } });
 });
 
 adminRouter.get("/alerts", any, async (req, res) => {
