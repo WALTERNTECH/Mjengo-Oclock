@@ -56,7 +56,7 @@ export default function Home() {
 
       <section className="hero">
         <h1>Book construction workers in Nairobi</h1>
-        <p>General workers, plumbers, electricians, welders, fundis and site managers. See the rate before you book, follow your worker on the map, and pay only when you approve the work.</p>
+        <p>General workers, plumbers, electricians, welders, fundis, painters, gypsum installers and site managers. See the rate before you book, follow your worker on the map, and pay only when you approve the work.</p>
       </section>
 
       {cats.data ? (

@@ -14,12 +14,16 @@ import type { Category, ClientJob, Me, Started } from "../types";
 // View 2: job details, date and time, photos, and a sticky footer with the live price
 // breakdown and Confirm and book (US-01). Payment is the M-Pesa hold. Rates follow the
 // construction and site labour rate schedule: per task or visit, per hour, per 8-hour shift
-// (hours beyond it billed hourly where a rate exists), or per foot.
+// (hours beyond it billed hourly where a rate exists), per day, or per foot.
+
+/** Painters and gypsum installers are booked by the day, picked with a stepper. */
+const byDay = (s: { pricing: string; unit: string }) => s.pricing === "per_unit" && s.unit === "day";
+const MAX_DAYS = 30;
 
 type Draft = {
   serviceId: string | null;
   hours: number;
-  /** Feet of trench and the like, as typed. */
+  /** Feet of trench, days of painting and the like, as typed. */
   quantity: string;
   overtimeHours: number;
   notes: string;
@@ -95,6 +99,8 @@ export default function Book() {
   useEffect(() => {
     if (svc?.pricing === "hourly" && draft.hours < svc.minQty) setDraft((d) => ({ ...d, hours: svc.minQty }));
     if (svc && !svc.overtimeRate && draft.overtimeHours) setDraft((d) => ({ ...d, overtimeHours: 0 }));
+    const days = Number(draft.quantity);
+    if (svc && byDay(svc) && !(days >= svc.minQty && days <= MAX_DAYS)) setDraft((d) => ({ ...d, quantity: String(svc.minQty) }));
   }, [svc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zoning: a site visit is priced by whether the site is in the Nairobi area or out of station,
@@ -230,7 +236,12 @@ export default function Book() {
             <Stepper value={Math.max(draft.hours, svc.minQty)} onChange={(v) => set("hours", v)} min={svc.minQty} max={24} step={svc.minQty % 1 ? 0.5 : 1} format={(v) => `${v} h`} />
           </Field>
         )}
-        {svc?.pricing === "per_unit" && (
+        {svc && byDay(svc) && (
+          <Field label="How many days?" error={errors.quantity} hint={`${ratePhrase(svc)}. If the work runs longer, the worker asks you in the app before adding a day.`}>
+            <Stepper value={Math.max(Number(draft.quantity) || 0, svc.minQty)} onChange={(v) => set("quantity", String(v))} min={svc.minQty} max={MAX_DAYS} format={(v) => `${v} ${unitWord("day", v)}`} />
+          </Field>
+        )}
+        {svc?.pricing === "per_unit" && !byDay(svc) && (
           <Input
             label={`How many ${unitWord(svc.unit, 2)}?`}
             inputMode="numeric"

@@ -582,7 +582,7 @@ const ServiceBody = z
     description: z.string().trim().max(300).default(""),
     pricing: z.enum(["flat", "hourly", "shift", "per_unit"]),
     rate: z.number().int().min(10).max(1_000_000),
-    /** What one rate buys: "task" or "visit" (flat), "ft" (per unit). Hour and shift are implied. */
+    /** What one rate buys: "task" or "visit" (flat), "ft" or "day" (per unit). Hour and shift are implied. */
     unit: z.string().trim().max(20).default(""),
     /** Least that can be booked: hours (hourly) or units (per_unit). */
     minQty: z.number().min(0.5).max(10_000).default(1),

@@ -502,6 +502,8 @@ describe("rate schedule", () => {
       ["electrical", "Electrician, by the hour", "hourly", 250, "per hour"],
       ["welding", "Welding job", "flat", 2000, "per task"],
       ["fundi", "General fundi job", "flat", 1600, "per task"],
+      ["painting", "Painter, by the day", "per_unit", 1600, "per day"],
+      ["gypsum", "Gypsum installer, by the day", "per_unit", 1600, "per day"],
       ["site_management", "Site manager visit, Nairobi", "flat", 15000, "per visit"],
       ["site_management", "Site manager visit, outside Nairobi", "flat", 35000, "per visit"],
       ["site_management", "Foreman, standard shift", "shift", 2000, "per 8-hour shift"],
@@ -547,6 +549,24 @@ describe("rate schedule", () => {
     assert.equal(inv.total, 9810);
   });
 
+  it("bills painters and gypsum installers per day, and extra days at the same rate", async () => {
+    await offDuty("painting");
+    const w = await worker("Painter Achieng", "painting", WESTLANDS);
+    const c = await signIn("Paint Owner");
+    const j = await book(c, "Painter, by the day", { quantity: 3 });
+    assert.deepEqual([j.price.base, j.price.total], [4800, 5232]);
+    assert.equal(j.priceLines[0].detail, "3 days × KES 1,600");
+    await payHold(c, j.id);
+    const o = await until(() => offerFor(w), "offer");
+    assert.match(o.summary, /3 days/);
+    ok(await call("POST", `/api/worker/offers/${o.offerId}/accept`, {}, w.token));
+    for (const step of ["arrive", "start"]) ok(await call("POST", `/api/worker/jobs/${j.id}/${step}`, {}, w.token));
+    ok(await upload(`/api/worker/jobs/${j.id}/extras`, { kind: "units", units: "1", reason: "Second coat on the ceiling" }, { photo: 1 }, w.token), 201);
+    assert.match(await lastSms(c.phone), /asks to add 1 more day \(KES 1,744\)/);
+    const gypsum = await book(await signIn("Ceiling Owner"), "Gypsum installer, by the day", { quantity: 2 });
+    assert.deepEqual([gypsum.price.base, gypsum.price.total], [3200, 3488]);
+  });
+
   it("prices site manager visits by zone: Nairobi area or out of station", async () => {
     const c = await signIn("Site Owner");
     const NAKURU = { lat: -0.3031, lng: 36.08 };
@@ -572,7 +592,26 @@ describe("rate schedule", () => {
     await seedCatalog(db2);
     const rows = await many<{ name: string; active: boolean }>(db2, `select name, active from services order by name`);
     assert.equal(rows.find((r) => r.name === "Fix a leaking tap")!.active, false);
-    assert.equal(rows.filter((r) => r.active).length, 11, "the schedule is added once");
+    assert.equal(rows.filter((r) => r.active).length, 13, "the schedule is added once");
+    await db2.close();
+  });
+
+  it("adds new trades to an existing schedule without undoing the team's edits", async () => {
+    const db2 = await pgliteDb();
+    await migrate(db2);
+    await seedCatalog(db2);
+    // As the catalogue stood at v2: no painters or gypsum installers, and a plumbing rate the team changed.
+    await db2.query(`delete from services where category_id in ('painting', 'gypsum')`);
+    await db2.query(`update services set rate_kes = 2200 where name = 'Plumbing job'`);
+    await db2.query(`update settings set value = '2'::jsonb where key = 'catalog_version'`);
+    await seedCatalog(db2);
+    const rows = await many<{ name: string; rate_kes: number; active: boolean }>(db2, `select name, rate_kes, active from services`);
+    assert.equal(rows.find((r) => r.name === "Plumbing job")!.rate_kes, 2200);
+    assert.deepEqual(rows.filter((r) => r.name.endsWith("by the day")).map((r) => [r.name, r.rate_kes, r.active]).sort(), [
+      ["Gypsum installer, by the day", 1600, true],
+      ["Painter, by the day", 1600, true],
+    ]);
+    assert.equal(rows.length, 13, "nothing else is added or retired");
     await db2.close();
   });
 });

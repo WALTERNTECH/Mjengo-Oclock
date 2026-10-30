@@ -24,7 +24,7 @@ export type Service = {
   description: string;
   pricing: Pricing;
   rate: number;
-  /** "task", "visit", "shift", "hour" or "ft". */
+  /** "task", "visit", "shift", "hour", "ft" or "day". */
   unit: string;
   /** "per task", "per 8-hour shift", "per foot"… */
   unitPhrase: string;

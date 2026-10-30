@@ -7,7 +7,7 @@
 //   hourly    rate × hours
 //   shift     a fixed price for a standard 8-hour shift; hours beyond it are billed at the
 //             overtime (hourly) rate where the schedule has one
-//   per_unit  rate × quantity (earthworks by the foot)
+//   per_unit  rate × quantity (earthworks by the foot, painters and gypsum installers by the day)
 //
 // The platform adds client_fee_pct to the job price and deducts worker_fee_pct from the
 // worker's share: on a KES 1,000 job the client pays 1,090, the worker receives 910 and

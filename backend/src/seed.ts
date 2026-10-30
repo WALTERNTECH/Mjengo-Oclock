@@ -9,10 +9,16 @@ import { one, type Db } from "./config/db.js";
 // - Standard day shifts are 8 hours; hours beyond that are billed hourly where an hourly rate exists.
 // - Site manager visits are a flat rate by zone: within the Nairobi area, or out of station.
 // - Plumber, welder and general fundi work is a flat rate per task or engagement.
+// - Painters and gypsum installers are billed per working day.
 // - Contractor overhead and specialised engineering review fees are not in the schedule; they
 //   are quoted under separate scope contracts.
+//
+// Version 2 replaced the earlier catalogue with the schedule. Later versions only add trades and
+// services that aren't there yet (matched by trade and name), so rates the team has edited stay.
+// v3 (2026-10-30): painters and gypsum installers at KES 1,600 a day.
 
-export const CATALOG_VERSION = 2;
+export const CATALOG_VERSION = 3;
+const SCHEDULE_VERSION = 2;
 
 const LABOR = "General labor services";
 const TRADES = "Specialized trades and skilled crafts";
@@ -24,7 +30,9 @@ const CATEGORIES = [
   { id: "electrical", name: "Electrical", trade: "electrician", blurb: "Wiring, faults, sockets and fittings", section: TRADES, requires_certificate: true, sort: 3 },
   { id: "welding", name: "Welding", trade: "welder", blurb: "Gates, grilles, frames and metal repairs", section: TRADES, requires_certificate: false, sort: 4 },
   { id: "fundi", name: "General Fundis", trade: "fundi", blurb: "Masonry, carpentry, painting and repairs", section: TRADES, requires_certificate: false, sort: 5 },
-  { id: "site_management", name: "Site Management", trade: "supervisor", blurb: "Site manager visits and foremen", section: MANAGEMENT, requires_certificate: false, sort: 6 },
+  { id: "painting", name: "Painting", trade: "painter", blurb: "Walls, ceilings, gates and finishes, inside and out", section: TRADES, requires_certificate: false, sort: 6 },
+  { id: "gypsum", name: "Gypsum Installation", trade: "gypsum installer", blurb: "Gypsum ceilings, partitions and cornices", section: TRADES, requires_certificate: false, sort: 7 },
+  { id: "site_management", name: "Site Management", trade: "supervisor", blurb: "Site manager visits and foremen", section: MANAGEMENT, requires_certificate: false, sort: 8 },
 ];
 
 type Svc = {
@@ -32,7 +40,7 @@ type Svc = {
   description: string;
   pricing: "flat" | "hourly" | "shift" | "per_unit";
   rate: number;
-  unit: "task" | "visit" | "shift" | "hour" | "ft";
+  unit: "task" | "visit" | "shift" | "hour" | "ft" | "day";
   minQty?: number;
   shiftHours?: number;
   overtimeRate?: number;
@@ -52,6 +60,8 @@ const SERVICES: Record<string, Svc[]> = {
   electrical: [{ name: "Electrician, by the hour", description: `Wiring, fault finding, sockets and fittings, billed per hour. ${MATERIALS}`, pricing: "hourly", rate: 250, unit: "hour", minQty: 1 }],
   welding: [{ name: "Welding job", description: `One welding task or engagement at a fixed rate: gates, grilles, frames or repairs. ${MATERIALS}`, pricing: "flat", rate: 2000, unit: "task" }],
   fundi: [{ name: "General fundi job", description: `One task or engagement at a fixed rate: masonry, carpentry, painting, tiling or general repairs. ${MATERIALS}`, pricing: "flat", rate: 1600, unit: "task" }],
+  painting: [{ name: "Painter, by the day", description: `One painter per working day: walls, ceilings, gates and finishes, inside or out. Book as many days as the job needs. Paint and ${MATERIALS.toLowerCase()}`, pricing: "per_unit", rate: 1600, unit: "day", minQty: 1 }],
+  gypsum: [{ name: "Gypsum installer, by the day", description: `One gypsum installer per working day: ceilings, partitions and cornices. Book as many days as the job needs. Boards and ${MATERIALS.toLowerCase()}`, pricing: "per_unit", rate: 1600, unit: "day", minQty: 1 }],
   site_management: [
     { name: "Site manager visit, Nairobi", description: "A site manager visits your site in the Nairobi area to inspect work and review progress.", pricing: "flat", rate: 15_000, unit: "visit", zone: "nairobi" },
     { name: "Site manager visit, outside Nairobi", description: "The same visit for a site outside the Nairobi area (out of station).", pricing: "flat", rate: 35_000, unit: "visit", zone: "outside" },
@@ -61,7 +71,9 @@ const SERVICES: Record<string, Svc[]> = {
 
 export async function seedCatalog(db: Db, log: (m: string) => void = () => {}) {
   const v = await one<{ value: unknown }>(db, `select value from settings where key = 'catalog_version'`);
-  if (v && Number(v.value) >= CATALOG_VERSION) return;
+  const from = v ? Number(v.value) : 0;
+  if (from >= CATALOG_VERSION) return;
+  const replace = from < SCHEDULE_VERSION;
   await db.tx(async (q) => {
     for (const c of CATEGORIES) {
       // Certificates and bookability are the team's call once set, so an existing category keeps them.
@@ -71,11 +83,13 @@ export async function seedCatalog(db: Db, log: (m: string) => void = () => {}) {
         [c.id, c.name, c.trade, c.blurb, c.section, c.requires_certificate, c.sort],
       );
     }
-    // Earlier services stay in the table for the jobs that reference them, but can't be booked.
-    const old = await q.query<{ id: string }>(`update services set active = false, updated_at = now() where active returning id`);
+    // Services from before the schedule stay in the table for the jobs that reference them, but can't be booked.
+    const old = replace ? (await q.query<{ id: string }>(`update services set active = false, updated_at = now() where active returning id`)).rows : [];
     let n = 0;
     for (const [cat, list] of Object.entries(SERVICES)) {
       for (const [i, s] of list.entries()) {
+        // A service the team edited or switched off is theirs; only missing ones are added.
+        if (!replace && (await q.query(`select 1 from services where category_id = $1 and name = $2`, [cat, s.name])).rows.length) continue;
         await q.query(
           `insert into services (category_id, name, description, pricing, rate_kes, unit_label, min_hours, shift_hours, overtime_rate_kes, zone, sort)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
@@ -88,6 +102,6 @@ export async function seedCatalog(db: Db, log: (m: string) => void = () => {}) {
       `insert into settings (key, value, updated_at) values ('catalog_version', $1::jsonb, now()) on conflict (key) do update set value = excluded.value, updated_at = now()`,
       [JSON.stringify(CATALOG_VERSION)],
     );
-    log(`catalogue v${CATALOG_VERSION}: ${n} services in ${CATEGORIES.length} trades${old.rows.length ? `, ${old.rows.length} earlier services retired` : ""}`);
+    log(`catalogue v${CATALOG_VERSION}: ${n} services added across ${CATEGORIES.length} trades${old.length ? `, ${old.length} earlier services retired` : ""}`);
   });
 }

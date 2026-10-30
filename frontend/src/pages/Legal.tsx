@@ -33,13 +33,13 @@ function Terms({ cfg }: { cfg?: Config }) {
   const w = cfg?.fees.workerPct ?? 9;
   return (
     <div className="prose">
-      <p>Mjengo O'clock is a platform in Nairobi that connects people who need construction and household trade work ("clients") with plumbers, electricians, site managers and general workers ("workers"). By using it you agree to these terms.</p>
+      <p>Mjengo O'clock is a platform in Nairobi that connects people who need construction and household trade work ("clients") with plumbers, electricians, painters, gypsum installers, site managers and general workers ("workers"). By using it you agree to these terms.</p>
       <h2>Who does the work</h2>
       <p>Workers are independent professionals, not employees of Mjengo O'clock. They decide whether to accept a job and are responsible for doing it with reasonable skill and care, for their own tools, and for their own income tax. Before a worker can receive jobs we check their national ID and a selfie, and for electricians and plumbers a trade certificate or reference letter. We review ratings and suspend workers who fall below our standard.</p>
       <h2>Prices and fees</h2>
       <ul>
         <li>
-          Each job shows its rate before you book, from our rate schedule: a flat rate per task or visit, an hourly rate, a fixed rate per 8-hour shift (hours beyond the shift billed hourly where a rate applies), or a rate per foot. Site manager visits are priced by
+          Each job shows its rate before you book, from our rate schedule: a flat rate per task or visit, an hourly rate, a fixed rate per 8-hour shift (hours beyond the shift billed hourly where a rate applies), a rate per day, or a rate per foot. Site manager visits are priced by
           zone, Nairobi area or out of station.
         </li>
         <li>Contractor overhead and specialised engineering review fees aren't included in the schedule and are agreed under a separate scope contract.</li>
@@ -144,7 +144,7 @@ function RateSchedule() {
           <b>Zones.</b> Site management visits are a flat rate based on location: within the Nairobi area, or out of station.
         </li>
         <li>
-          <b>Task-based billing.</b> Plumbers, welders and general fundis are billed a flat rate per assigned task or engagement. Earthworks are billed per foot.
+          <b>Task-based billing.</b> Plumbers, welders and general fundis are billed a flat rate per assigned task or engagement. Painters and gypsum installers are billed per working day. Earthworks are billed per foot.
         </li>
         <li>
           <b>Exclusions.</b> Contractor overhead and specialised engineering review fees aren't part of this standard schedule; they're handled under separate scope contracts.
