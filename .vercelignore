@@ -1,0 +1,9 @@
+# Secrets, local data and build output never leave this machine; Vercel installs and builds.
+.local
+.env
+.env.*
+node_modules
+**/node_modules
+**/dist
+.claude
+*.log

@@ -1,5 +1,6 @@
 import { Camera, X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
+import { shrinkPhoto } from "../lib/photos";
 
 /** Up to `max` photos from the camera or gallery, previewed before upload. */
 export function PhotoPicker({ files, onChange, max = 3, label = "Add photo", capture }: { files: File[]; onChange: (f: File[]) => void; max?: number; label?: string; capture?: "user" | "environment" }) {
@@ -29,10 +30,10 @@ export function PhotoPicker({ files, onChange, max = 3, label = "Add photo", cap
         capture={capture}
         multiple={max - files.length > 1}
         hidden
-        onChange={(e) => {
+        onChange={async (e) => {
           const picked = Array.from(e.target.files ?? []).filter((f) => f.type.startsWith("image/"));
-          onChange([...files, ...picked].slice(0, max));
           e.target.value = "";
+          onChange([...files, ...(await Promise.all(picked.slice(0, max - files.length).map((f) => shrinkPhoto(f))))]);
         }}
       />
     </div>
@@ -59,10 +60,10 @@ export function DocPicker({ title, hint, current, onPick, busy, capture }: { tit
         accept="image/*"
         capture={capture}
         hidden
-        onChange={(e) => {
+        onChange={async (e) => {
           const f = e.target.files?.[0];
-          if (f) onPick(f);
           e.target.value = "";
+          if (f) onPick(await shrinkPhoto(f));
         }}
       />
     </div>

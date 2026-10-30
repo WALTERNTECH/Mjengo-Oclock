@@ -13,12 +13,16 @@ export async function migrate(db: Db, log: (m: string) => void = () => {}) {
   const done = new Set(rows.map((r) => r.id));
   for (const m of MIGRATIONS) {
     if (done.has(m.id)) continue;
-    await db.tx(async (q) => {
+    const ran = await db.tx(async (q) => {
+      // Several instances can start at once; the first runs the migration, the rest find it done.
+      await q.query(`select pg_advisory_xact_lock(hashtext('mjengo.migrate'))`);
+      if ((await q.query(`select 1 from ${SCHEMA}.schema_migrations where id = $1`, [m.id])).rows.length) return false;
       await q.exec(`set local search_path to ${SCHEMA}, public`);
       await q.exec(m.sql);
       await q.query(`insert into ${SCHEMA}.schema_migrations (id) values ($1)`, [m.id]);
+      return true;
     });
-    log(`migrated ${m.id}`);
+    if (ran) log(`migrated ${m.id}`);
   }
 }
 

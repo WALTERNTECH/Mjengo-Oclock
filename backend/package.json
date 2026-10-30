@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
@@ -13,8 +15,9 @@
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts"
   },
   "dependencies": {
-    "cors": "2.8.6",
+    "@vercel/functions": "3.9.11",
     "bcryptjs": "3.0.3",
+    "cors": "2.8.6",
     "express": "5.3.0",
     "express-rate-limit": "8.7.1",
     "helmet": "8.3.0",

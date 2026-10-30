@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { db, one } from "../config/db.js";
+import { background } from "../utils/background.js";
 import { verifyToken, type AdminClaims, type UserClaims } from "../utils/security.js";
 import { forbidden, unauthorized } from "../utils/http.js";
 
@@ -45,7 +46,7 @@ async function resolve(req: Request): Promise<AuthUser | null> {
   );
   if (!u || u.status !== "active" || u.token_version !== claims.tv) return null;
   if (Date.now() - new Date(u.last_seen_at).getTime() > 5 * 60_000) {
-    db().query(`update users set last_seen_at = now() where id = $1`, [u.id]).catch(() => {});
+    background(db().query(`update users set last_seen_at = now() where id = $1`, [u.id]), "last-seen");
   }
   return u;
 }

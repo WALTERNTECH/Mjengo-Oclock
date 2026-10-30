@@ -49,7 +49,8 @@ Billing rules: day shifts are capped at 8 hours and hours beyond that bill hourl
 
 ```
 backend/    Express + TypeScript API (Postgres via pg; migrations run at boot)
-frontend/   React + TypeScript + Vite PWA, served by the API in production
+frontend/   React + TypeScript + Vite PWA
+api/        The Vercel function entry (re-exports backend/src/vercel.ts)
 brand/      Logo mark, app icon, share image, and the script that renders the PNGs
 ```
 
@@ -78,6 +79,19 @@ runs the end-to-end flows: SMS sign-in, booking and the fee maths, nearest-worke
 ## Database
 
 Mjengo has its own schema, `mjengo`, inside the Fpesa Supabase project (`mrsxvdxaoogamhkdqejp`), owned by the role `mjengo_api`. That role has no rights on Fpesa's or Konnect's tables or functions. The server applies its own migrations at boot (`backend/src/migrations.ts`). Row level security is on for every table with no policies, so Supabase's `anon` and `authenticated` roles see nothing.
+
+## Hosting
+
+Production runs on Vercel (project `mjengo-oclock`, region `fra1` next to the Supabase database): https://mjengo-oclock.vercel.app. `vercel.json` builds both workspaces, serves `frontend/dist` as static files with the security headers, and sends `/api/*` and `/health` to one function (`api/index.mjs`). Deploy with `vercel deploy --prod` from the repo root; `.vercelignore` keeps `.local/` and build output off the upload.
+
+There is no process between requests on Vercel, so:
+
+- **Background jobs** (dispatch every 5 s, housekeeping every 30 s) are started by API requests, which the open app makes every few seconds, and by a daily Vercel Cron call to `/api/cron/tick` for quiet spells. A lease row per job in `job_leases` means only one instance runs a job at a time.
+- **Live updates** are rows in `live_events` that the app polls every 3 seconds while on screen (30 in the background), instead of an open stream.
+- **Work after the response** (simulated M-Pesa results, event writes) goes through `waitUntil`, so the function stays up until it finishes.
+- **Uploads**: a Vercel request is capped at 4.5 MB, so the app scales photos to 2000 px JPEG before sending; the server keeps at most 1600 px anyway.
+
+`npm start` still runs the API as a long-running server (timers instead of request-driven jobs), as on Render.
 
 ## Going live
 

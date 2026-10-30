@@ -16,6 +16,8 @@ export type Env = {
   mediaKey: string;
   /** Lets the first admin account be created at /admin/setup while none exists. */
   adminSetupToken: string | null;
+  /** Vercel Cron sends it as a bearer token to /api/cron/tick. */
+  cronSecret: string;
   mpesa: {
     /** "daraja" talks to Safaricom; "simulated" confirms every prompt after a few seconds. */
     driver: "daraja" | "simulated";
@@ -71,7 +73,8 @@ export function loadEnv(e: NodeJS.ProcessEnv = process.env): Env {
   const on = (v: string | undefined, dflt: boolean) => (v == null || v === "" ? dflt : /^(1|true|on|yes)$/i.test(v));
   const smsConfigured = Boolean(e.CELCOM_API_KEY && e.CELCOM_PARTNER_ID && e.CELCOM_SHORTCODE);
   const darajaConfigured = Boolean(e.MPESA_CONSUMER_KEY && e.MPESA_CONSUMER_SECRET && e.MPESA_PASSKEY);
-  const publicUrl = (e.PUBLIC_URL ?? e.RENDER_EXTERNAL_URL ?? `http://localhost:${e.PORT ?? 4000}`).replace(/\/$/, "");
+  const vercelUrl = e.VERCEL_PROJECT_PRODUCTION_URL ? `https://${e.VERCEL_PROJECT_PRODUCTION_URL}` : undefined;
+  const publicUrl = (e.PUBLIC_URL ?? e.RENDER_EXTERNAL_URL ?? vercelUrl ?? `http://localhost:${e.PORT ?? 4000}`).replace(/\/$/, "");
   const jwtSecret = e.JWT_SECRET ?? (nodeEnv === "production" ? "" : "dev-only-secret-change-me");
 
   const env: Env = {
@@ -85,6 +88,7 @@ export function loadEnv(e: NodeJS.ProcessEnv = process.env): Env {
     masterKey: masterKey(e.MASTER_KEY, nodeEnv),
     mediaKey: e.MEDIA_SIGNING_KEY || jwtSecret,
     adminSetupToken: e.ADMIN_SETUP_TOKEN || (nodeEnv === "production" ? null : "local-setup"),
+    cronSecret: e.CRON_SECRET ?? "",
     mpesa: {
       driver: (e.MPESA_DRIVER as "daraja" | "simulated") || (darajaConfigured ? "daraja" : "simulated"),
       env: e.MPESA_ENV === "production" ? "production" : "sandbox",

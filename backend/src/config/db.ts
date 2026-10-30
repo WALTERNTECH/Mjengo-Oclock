@@ -23,14 +23,15 @@ pg.types.setTypeParser(1700, (v) => Number(v));
 // date stays a plain YYYY-MM-DD string so it never shifts across time zones.
 pg.types.setTypeParser(1082, (v) => v);
 
-export function pgDb(url: string): Db {
+export function pgDb(url: string, opts: { max?: number; onPool?: (pool: pg.Pool) => void } = {}): Db {
   const pool = new pg.Pool({
     connectionString: url,
-    max: 8,
+    max: opts.max ?? 8,
     idleTimeoutMillis: 30_000,
     ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false },
   });
   pool.on("error", (e) => console.error("pg pool error", e.message));
+  opts.onPool?.(pool);
   const wrap = (c: pg.PoolClient): Q => ({
     query: (sql, params) => c.query(sql, params as unknown[]) as never,
     exec: async (sql) => {

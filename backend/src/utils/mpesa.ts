@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { later } from "./background.js";
 import { darajaPhone } from "./kenya.js";
 
 // Every Daraja call lives here so the integration can be swapped or simulated in one place.
@@ -123,10 +124,11 @@ export const daraja: MpesaDriver = {
 
 /**
  * Stands in for Safaricom until Daraja credentials exist: accepts every prompt and reports
- * success a few seconds later through the same settlement path a real callback takes.
+ * success a few seconds later through the same settlement path a real callback takes. The
+ * time is in the request id, so a status query from any instance gives the same answer.
  */
-export function simulatedDriver(onResult: (r: StkResult) => void, delayMs = 4500): MpesaDriver {
-  const results = new Map<string, StkResult>();
+export function simulatedDriver(onResult: (r: StkResult) => unknown, delayMs = 4500): MpesaDriver {
+  const SUCCESS = "The service request is processed successfully.";
   return {
     name: "simulated",
     async stkPush(req) {
@@ -135,20 +137,17 @@ export function simulatedDriver(onResult: (r: StkResult) => void, delayMs = 4500
         checkoutRequestId: id,
         merchantRequestId: `SIM-${Date.now()}`,
         resultCode: "0",
-        resultDesc: "The service request is processed successfully.",
+        resultDesc: SUCCESS,
         amount: Math.round(req.amount),
         receipt: `SIM${Math.random().toString(36).slice(2, 9).toUpperCase()}`,
         phone: darajaPhone(req.phone),
       };
-      setTimeout(() => {
-        results.set(id, result);
-        onResult(result);
-      }, delayMs).unref?.();
+      later(() => onResult(result), delayMs, "pay:simulated");
       return { checkoutRequestId: id, merchantRequestId: result.merchantRequestId!, customerMessage: "Success. Request accepted for processing" };
     },
     async query(id) {
-      const r = results.get(id);
-      return r ? { resultCode: r.resultCode, resultDesc: r.resultDesc } : null;
+      const at = Number(/^ws_CO_SIM_(\d+)_/.exec(id)?.[1]);
+      return at && Date.now() - at >= delayMs ? { resultCode: "0", resultDesc: SUCCESS } : null;
     },
   };
 }
@@ -209,21 +208,24 @@ export const darajaB2c: B2cDriver = {
 };
 
 /** Pays every payout a few seconds later through the same result path Safaricom uses. */
-export function simulatedB2c(onResult: (r: B2cResult) => void, delayMs = 3000): B2cDriver {
+export function simulatedB2c(onResult: (r: B2cResult) => unknown, delayMs = 3000): B2cDriver {
   return {
     name: "simulated",
     async send(req) {
       const conversationId = `AG_SIM_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      setTimeout(() => {
-        onResult({
-          originatorId: req.originatorId,
-          conversationId,
-          resultCode: "0",
-          resultDesc: "The service request is processed successfully.",
-          receipt: `SIM${Math.random().toString(36).slice(2, 9).toUpperCase()}`,
-          amount: Math.round(req.amount),
-        });
-      }, delayMs).unref?.();
+      later(
+        () =>
+          onResult({
+            originatorId: req.originatorId,
+            conversationId,
+            resultCode: "0",
+            resultDesc: "The service request is processed successfully.",
+            receipt: `SIM${Math.random().toString(36).slice(2, 9).toUpperCase()}`,
+            amount: Math.round(req.amount),
+          }),
+        delayMs,
+        "payout:simulated",
+      );
       return { conversationId, originatorId: req.originatorId };
     },
   };

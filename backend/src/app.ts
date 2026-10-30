@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import cors from "cors";
@@ -6,6 +7,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
+import { kickJobs, runDueJobs } from "./jobs.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { adminRouter } from "./routes/admin.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
@@ -15,11 +17,13 @@ import { meRouter } from "./routes/me.routes.js";
 import { invoiceRouter, mediaRouter, metricsRouter, notificationsRouter, safetyRouter } from "./routes/misc.routes.js";
 import { mpesaRouter } from "./routes/mpesa.routes.js";
 import { workerRouter } from "./routes/worker.routes.js";
+import { notFound } from "./utils/http.js";
 
 export function createApp() {
   const app = express();
   // Render puts Cloudflare and its own proxy in front: the visitor is three hops back.
-  app.set("trust proxy", 3);
+  // Vercel's edge overwrites X-Forwarded-For with the visitor's address: one hop.
+  app.set("trust proxy", process.env.VERCEL ? 1 : 3);
   app.disable("x-powered-by");
 
   const tileHosts = ["https://tile.openstreetmap.org", "https://api.mapbox.com"];
@@ -85,10 +89,23 @@ export function createApp() {
       limit: env.nodeEnv === "test" ? 100_000 : 600,
       standardHeaders: "draft-8",
       legacyHeaders: false,
-      skip: (req) => req.path.startsWith("/media/") || req.path.startsWith("/mpesa/callback/") || req.path.startsWith("/mpesa/b2c/") || req.path === "/notifications/stream" || req.path === "/worker/location",
+      skip: (req) => req.path.startsWith("/media/") || req.path.startsWith("/mpesa/callback/") || req.path.startsWith("/mpesa/b2c/") || req.path === "/notifications/events" || req.path === "/worker/location",
       message: { error: { code: "rate_limited", message: "Too many requests. Slow down for a minute." } },
     }),
   );
+  app.use("/api", (_req, _res, next) => {
+    kickJobs();
+    next();
+  });
+
+  // Vercel Cron calls this once a day, so due work still runs on a day nobody opens the app.
+  app.get("/api/cron/tick", async (req, res) => {
+    const want = Buffer.from(`Bearer ${env.cronSecret}`);
+    const got = Buffer.from(req.get("authorization") ?? "");
+    if (!env.cronSecret || want.length !== got.length || !timingSafeEqual(want, got)) throw notFound();
+    await runDueJobs();
+    res.json({ ok: true });
+  });
 
   app.use("/api/auth", authRouter);
   app.use("/api/me", meRouter);

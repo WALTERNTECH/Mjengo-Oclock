@@ -2,13 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { db, many, one } from "../config/db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { attach, issueTicket, redeemTicket } from "../services/events.js";
+import { eventsSince } from "../services/events.js";
 import { reportProblem, type JobRow } from "../services/jobflow.js";
 import { invoice } from "../services/views.js";
-import { notFound, unauthorized } from "../utils/http.js";
+import { notFound } from "../utils/http.js";
 import { checkMediaSig } from "../utils/security.js";
 
-// Private photos by signed link, notifications and the live stream, safety reports
+// Private photos by signed link, notifications and live updates, safety reports
 // (US-09), and the invoice link sent by SMS (US-04).
 
 export const mediaRouter = Router();
@@ -36,14 +36,10 @@ notificationsRouter.post("/read", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-notificationsRouter.post("/stream-ticket", requireAuth, (req, res) => {
-  res.json({ ticket: issueTicket(req.user!.id) });
-});
-
-notificationsRouter.get("/stream", (req, res) => {
-  const userId = redeemTicket(String(req.query.ticket ?? ""));
-  if (!userId) throw unauthorized("Stream ticket expired");
-  attach(userId, res);
+/** Live updates after the app's cursor; the app polls this every few seconds while open. */
+notificationsRouter.get("/events", requireAuth, async (req, res) => {
+  const after = Number(req.query.after);
+  res.set("Cache-Control", "no-store").json(await eventsSince(req.user!.id, req.query.after != null && Number.isSafeInteger(after) && after >= 0 ? after : null));
 });
 
 export const safetyRouter = Router();

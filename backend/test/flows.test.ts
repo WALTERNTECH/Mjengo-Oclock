@@ -22,7 +22,7 @@ const { initPayouts } = await import("../src/services/payouts.js");
 const { clearSettingsCache } = await import("../src/services/settings.js");
 const { quote, split } = await import("../src/services/pricing.js");
 const { createApp } = await import("../src/app.js");
-const { runDispatchOnce, runHousekeepingOnce } = await import("../src/jobs.js");
+const { runDispatchOnce, runHousekeepingOnce, runDueJobs } = await import("../src/jobs.js");
 const { totpAt } = await import("../src/utils/security.js");
 
 let base = "";
@@ -613,6 +613,33 @@ describe("rate schedule", () => {
     ]);
     assert.equal(rows.length, 13, "nothing else is added or retired");
     await db2.close();
+  });
+});
+
+describe("serverless hosting", () => {
+  it("delivers live updates to the app through polling, from where the cursor left off", async () => {
+    const c = await signIn("Poll Client");
+    const start = ok(await call("GET", "/api/notifications/events", undefined, c.token));
+    assert.deepEqual(start.events, [], "the first poll only sets the cursor");
+    const j = await book(c, "Plumbing job");
+    await payHold(c, j.id);
+    const got = await until(async () => {
+      const r = ok(await call("GET", `/api/notifications/events?after=${start.cursor}`, undefined, c.token));
+      return r.events.some((e: any) => e.event === "payment") && r;
+    }, "payment event");
+    assert.equal(got.events.find((e: any) => e.event === "payment").data.status, "SUCCESS");
+    const next = ok(await call("GET", `/api/notifications/events?after=${got.cursor}`, undefined, c.token));
+    assert.ok(!next.events.some((e: any) => e.event === "payment"), "an event is delivered once");
+  });
+
+  it("runs each due job once however many instances ask", async () => {
+    await db.query(`update job_leases set next_at = now() - interval '1 second'`);
+    await Promise.all([runDueJobs(), runDueJobs()]);
+    const first = await many<{ name: string; next_at: Date }>(db, `select name, next_at from job_leases order by name`);
+    assert.ok(first.every((l) => new Date(l.next_at).getTime() > Date.now()), "both leases taken");
+    await runDueJobs();
+    const again = await many<{ name: string; next_at: Date }>(db, `select name, next_at from job_leases order by name`);
+    assert.deepEqual(again.map((l) => new Date(l.next_at).getTime()), first.map((l) => new Date(l.next_at).getTime()), "not due again yet");
   });
 });
 

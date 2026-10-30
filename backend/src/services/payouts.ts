@@ -18,7 +18,7 @@ const B2C_MIN_KES = 10;
 
 let driver: B2cDriver | null = null;
 export function initPayouts() {
-  if (env.mpesa.driver === "simulated") driver = simulatedB2c((r) => void handleB2cResult(r).catch((e) => console.error("[payout] result", e)), Number(process.env.MPESA_SIM_DELAY_MS ?? 3000));
+  if (env.mpesa.driver === "simulated") driver = simulatedB2c((r) => handleB2cResult(r).catch((e) => console.error("[payout] result", e)), Number(process.env.MPESA_SIM_DELAY_MS ?? 3000));
   else driver = b2cConfigured() ? darajaB2c : null;
   console.log(`[payout] B2C: ${driver ? driver.name : "not configured (payouts wait for the finance team)"}`);
 }

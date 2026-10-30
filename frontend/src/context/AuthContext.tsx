@@ -87,9 +87,12 @@ export function onLive(event: string, fn: Handler) {
 }
 const dispatch = (event: string, data: unknown) => handlers.get(event)?.forEach((h) => h(data));
 
-const EVENTS = ["notification", "job", "offer", "offer_gone", "location", "payment"];
-
-/** Keeps one event stream open while signed in, reconnecting with a fresh ticket after drops. */
+/**
+ * Picks up live updates (job changes, offers, the worker's position, payments, notifications)
+ * while signed in: every 3 seconds with the app on screen, every 30 in the background, and at
+ * once when it comes back into view. Short requests rather than an open stream, so it works
+ * on serverless hosting.
+ */
 export function LiveEvents() {
   const { me, refresh } = useAuth();
   const id = me?.id;
@@ -97,37 +100,35 @@ export function LiveEvents() {
   refreshRef.current = refresh;
   useEffect(() => {
     if (!id) return;
-    let es: EventSource | null = null;
     let stopped = false;
-    let delay = 2000;
+    let busy = false;
+    let cursor: number | null = null;
     let timer: ReturnType<typeof setTimeout>;
-    const open = async () => {
+    const poll = async () => {
+      clearTimeout(timer);
+      if (busy) return;
+      busy = true;
       try {
-        const r = await api.post<{ ticket: string }>("/notifications/stream-ticket");
+        const r = await api.get<{ cursor: number; events: { event: string; data: unknown }[] }>("/notifications/events", { params: cursor == null ? {} : { after: cursor } });
         if (stopped) return;
-        es = new EventSource(`/api/notifications/stream?ticket=${encodeURIComponent(r.data.ticket)}`);
-        es.onopen = () => (delay = 2000);
-        for (const ev of EVENTS) {
-          es.addEventListener(ev, (m) => {
-            const data = JSON.parse((m as MessageEvent).data);
-            dispatch(ev, data);
-            if (ev === "notification" || ev === "job") void refreshRef.current();
-            if (ev === "notification") void invalidate("/notifications");
-          });
-        }
-        es.onerror = () => {
-          es?.close();
-          if (!stopped) timer = setTimeout(open, (delay = Math.min(delay * 2, 30_000)));
-        };
+        cursor = r.data.cursor;
+        for (const e of r.data.events) dispatch(e.event, e.data);
+        if (r.data.events.some((e) => e.event === "notification" || e.event === "job")) void refreshRef.current();
+        if (r.data.events.some((e) => e.event === "notification")) void invalidate("/notifications");
       } catch {
-        if (!stopped) timer = setTimeout(open, (delay = Math.min(delay * 2, 30_000)));
+        // Offline or signed out; the next poll tries again.
+      } finally {
+        busy = false;
+        if (!stopped) timer = setTimeout(poll, document.visibilityState === "visible" ? 3_000 : 30_000);
       }
     };
-    void open();
+    const onShow = () => document.visibilityState === "visible" && void poll();
+    document.addEventListener("visibilitychange", onShow);
+    void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
-      es?.close();
+      document.removeEventListener("visibilitychange", onShow);
     };
   }, [id]);
   return null;

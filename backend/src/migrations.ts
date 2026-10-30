@@ -460,4 +460,28 @@ alter table extra_requests add constraint extra_requests_kind_check check (kind 
 alter table extra_requests add column units numeric;
 `,
   },
+  {
+    // Serverless hosting: live updates the app polls for, and leases so background jobs
+    // driven by requests from many function instances run once at a time.
+    id: "004_live_events_and_job_leases",
+    sql: `
+create table live_events (
+  id bigserial primary key,
+  user_id uuid not null references users(id) on delete cascade,
+  event text not null,
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index live_events_user_idx on live_events (user_id, id);
+create index live_events_created_idx on live_events (created_at);
+
+create table job_leases (
+  name text primary key,
+  next_at timestamptz not null default now()
+);
+insert into job_leases (name) values ('dispatch'), ('housekeeping');
+
+${rls(["live_events", "job_leases"])}
+`,
+  },
 ];

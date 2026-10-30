@@ -38,7 +38,7 @@ export function initPayments() {
   driver =
     env.mpesa.driver === "daraja"
       ? daraja
-      : simulatedDriver((r) => void settle(r, "simulated").catch((e) => console.error("[pay] settle", e)), Number(process.env.MPESA_SIM_DELAY_MS ?? 4500));
+      : simulatedDriver((r) => settle(r, "simulated").catch((e) => console.error("[pay] settle", e)), Number(process.env.MPESA_SIM_DELAY_MS ?? 4500));
   console.log(`[pay] M-Pesa driver: ${driver.name}${driver.name === "daraja" ? ` (${env.mpesa.env})` : ""}`);
 }
 export const paymentDriver = () => driver.name;

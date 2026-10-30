@@ -1,48 +1,20 @@
-import type { Response } from "express";
-import { randomBytes } from "node:crypto";
+import { db, many, one } from "../config/db.js";
+import { background } from "../utils/background.js";
 
-// Server-sent events to signed-in browsers: job updates, offers, live worker location,
-// payment results and notifications. One process, so an in-memory registry is enough.
-
-const streams = new Map<string, Set<Response>>();
-const tickets = new Map<string, { userId: string; until: number }>();
-
-/** EventSource cannot send headers, so the page trades its token for a 60-second ticket. */
-export function issueTicket(userId: string): string {
-  const t = randomBytes(18).toString("base64url");
-  tickets.set(t, { userId, until: Date.now() + 60_000 });
-  return t;
-}
-export function redeemTicket(t: string): string | null {
-  const v = tickets.get(t);
-  tickets.delete(t);
-  return v && v.until > Date.now() ? v.userId : null;
-}
-
-export function attach(userId: string, res: Response) {
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-  res.write(`retry: 4000\n\n`);
-  let set = streams.get(userId);
-  if (!set) streams.set(userId, (set = new Set()));
-  set.add(res);
-  const ping = setInterval(() => res.write(`: ping\n\n`), 25_000);
-  res.on("close", () => {
-    clearInterval(ping);
-    set!.delete(res);
-    if (!set!.size) streams.delete(userId);
-  });
-}
+// Live updates to signed-in apps: job updates, offers, live worker location, payment results
+// and notifications. Each one is a row the app picks up on its next poll, every few seconds
+// while it's open, so updates reach the app whichever server or function instance raised
+// them. Housekeeping deletes rows after 15 minutes.
 
 export function emit(userId: string, event: string, data: unknown) {
-  const set = streams.get(userId);
-  if (!set) return;
-  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of set) res.write(frame);
+  background(db().query(`insert into live_events (user_id, event, data) values ($1, $2, $3)`, [userId, event, JSON.stringify(data)]), "events");
 }
 
-export const isOnline = (userId: string) => streams.has(userId);
+export type LiveEvent = { event: string; data: unknown };
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, v] of tickets) if (v.until < now) tickets.delete(t);
-}, 60_000).unref();
+/** Events for this user after the app's cursor. Without one, just the cursor to start from. */
+export async function eventsSince(userId: string, after: number | null): Promise<{ cursor: number; events: LiveEvent[] }> {
+  if (after == null) return { cursor: (await one<{ id: number }>(db(), `select coalesce(max(id), 0) as id from live_events`))!.id, events: [] };
+  const rows = await many<{ id: number; event: string; data: unknown }>(db(), `select id, event, data from live_events where user_id = $1 and id > $2 order by id limit 200`, [userId, after]);
+  return { cursor: rows.length ? rows[rows.length - 1].id : after, events: rows.map((r) => ({ event: r.event, data: r.data })) };
+}

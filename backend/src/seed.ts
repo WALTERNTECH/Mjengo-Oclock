@@ -1,4 +1,4 @@
-import { one, type Db } from "./config/db.js";
+import { one, type Db, type Q } from "./config/db.js";
 
 // The trades and their rates, from the Construction & Site Labor Rate Schedule. This is the
 // catalogue, not sample data: the operations team edits it in Admin › Trades and rates, and
@@ -69,12 +69,16 @@ const SERVICES: Record<string, Svc[]> = {
   ],
 };
 
+const version = async (q: Q) => Number((await one<{ value: unknown }>(q, `select value from settings where key = 'catalog_version'`))?.value ?? 0);
+
 export async function seedCatalog(db: Db, log: (m: string) => void = () => {}) {
-  const v = await one<{ value: unknown }>(db, `select value from settings where key = 'catalog_version'`);
-  const from = v ? Number(v.value) : 0;
-  if (from >= CATALOG_VERSION) return;
-  const replace = from < SCHEDULE_VERSION;
+  if ((await version(db)) >= CATALOG_VERSION) return;
   await db.tx(async (q) => {
+    // Several instances can start at once; the first applies the upgrade, the rest find it done.
+    await q.query(`select pg_advisory_xact_lock(hashtext('mjengo.catalog'))`);
+    const from = await version(q);
+    if (from >= CATALOG_VERSION) return;
+    const replace = from < SCHEDULE_VERSION;
     for (const c of CATEGORIES) {
       // Certificates and bookability are the team's call once set, so an existing category keeps them.
       await q.query(
